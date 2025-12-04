@@ -1,9 +1,9 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 import { Workspace } from '../logic/Workspace';
 import type { ChannelIdentity, Message } from '../logic/types';
 
 interface ChatState {
-    activeChannelId: string;
+    activeChannel: ChannelIdentity;
     availableChannels: ChannelIdentity[];
     messages: Message[];
     cursorIndex: number;
@@ -11,35 +11,52 @@ interface ChatState {
 }
 
 function createChatStore() {
-    // 1. Instantiate the Engine
     const workspace = new Workspace();
 
-    // 2. Create the Svelte Store
+    // Define Initial Channels
+    const systemChannel: ChannelIdentity = {
+        id: 'system',
+        name: 'system',
+        service: { id: 'internal', name: 'Solaria' }
+    };
+
+    // Initialize Store
     const store = writable<ChatState>({
-        activeChannelId: 'general',
-        availableChannels: [{ 
-            id: 'general', 
-            name: 'general', 
-            service: { id: 'sys', name: 'System' } 
-        }], 
+        // CHANGED: Default to system for introspection
+        activeChannel: systemChannel, 
+        
+        availableChannels: [systemChannel], 
         messages: [],
         cursorIndex: -1,
         isAttached: true
     });
+
+    // Ensure Workspace tracks them
+    workspace.openChannel(systemChannel);
+    
+    // Set the workspace active channel to match the store default
+    workspace.activeChannel = systemChannel;
 
     let activeBufferUnsubscribe: (() => void) | null = null;
 
     const syncState = () => {
         const win = workspace.getActiveWindow();
         const buf = workspace.getActiveBuffer();
+        
+        if (!workspace.activeChannel) return; 
 
-        store.set({
-            activeChannelId: workspace.activeChannelId,
-            availableChannels: workspace.getChannelList(),
+        store.update(s => ({
+            ...s, 
+            
+            // Sync these from Workspace
+            activeChannel: workspace.activeChannel,
             messages: buf.messages,
             cursorIndex: win.cursorIndex,
-            isAttached: win.isAttached
-        });
+            isAttached: win.isAttached,
+            
+            // DO NOT OVERWRITE availableChannels with workspace.getChannelList()
+            // The Workspace only knows about OPEN tabs. The Store knows about the WORLD.
+        }));
     };
 
     workspace.subscribe(() => {
@@ -56,7 +73,7 @@ function createChatStore() {
         });
     }
 
-    // Initialize
+    // Initialize listener
     setupActiveBufferListener();
     syncState();
 
@@ -77,13 +94,61 @@ function createChatStore() {
             syncState();
         },
 
-        switchChannel: (channelId: string) => {
-            workspace.openChannelById(channelId);
+        switchChannel: (channel: ChannelIdentity) => {
+            if (!channel) {
+                console.error("Store: switchChannel called with null/undefined");
+                return;
+            }
+            workspace.openChannel(channel);
+        },
+
+        openThread: (msg: Message) => {
+            const currentChan = workspace.activeChannel;
+            workspace.openThread(msg, currentChan);
+            syncState();
+        },
+
+        goBack: () => {
+            workspace.goBack();
+            syncState();
         },
 
         detach: () => {
-            workspace.detach();
+            workspace.getActiveWindow().detach();
             syncState();
+        },
+
+        updateMessage: (id: string, newContent: string) => {
+            const buffer = workspace.getActiveBuffer();
+            const msg = buffer.messages.find(m => m.id === id);
+            if (msg) {
+                msg.content = newContent;
+            }
+            syncState();
+        },
+
+        removeMessage: (id: string) => {
+            const buffer = workspace.getActiveBuffer();
+            buffer.messages = buffer.messages.filter(m => m.id !== id);
+            syncState();
+        },
+
+        upsertChannels: (newChannels: ChannelIdentity[]) => {
+            store.update(s => {
+                const currentChannels = s.availableChannels || [];
+                const channelMap = new Map(currentChannels.map(c => [c.id, c]));
+                
+                for (const ch of newChannels) {
+                    const existing = channelMap.get(ch.id);
+                    // Merge logic similar to workspace
+                    if (existing) {
+                        channelMap.set(ch.id, { ...existing, ...ch });
+                    } else {
+                        channelMap.set(ch.id, ch);
+                    }
+                }
+                return { ...s, availableChannels: Array.from(channelMap.values()) };
+            });
         }
     };
 }

@@ -59,7 +59,7 @@
     // Fuzzysort results are wrapped in { obj: ... }
     const target = results[selectedIndex];
     if (target) {
-      chatStore.switchChannel(target.obj.id);
+      chatStore.switchChannel(target.obj);
       onClose();
     }
   }
@@ -86,7 +86,7 @@
                 on:click={() => { selectedIndex = i; selectChannel(); }}
             >
                 <span class="service">[{res.obj.service.name}]</span> 
-                <span class="hash">#</span> {res.obj.id}
+                <span class="hash">#</span> {res.obj.name}
             </div>
         {/each}
         
@@ -99,11 +99,20 @@
 
 <style>
   /* Use Kanagawa variables defined in App.svelte */
-  .backdrop {
+.backdrop {
+    /* Define local variables based on global theme */
+    --bg-primary: var(--sumi-ink-1);
+    --bg-secondary: var(--sumi-ink-0);
+    --border: var(--sumi-ink-3);
+    --fg-primary: var(--fuji-white);
+    --fg-dim: var(--katana-gray);
+    --fg-accent: var(--ronin-yellow);
+    --cursor-bg: var(--sumi-ink-2);
+
     position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
     background: rgba(0, 0, 0, 0.5);
-    display: flex; justify-content: center; align-items: start; /* align top */
-    padding-top: 100px; /* Telescope style */
+    display: flex; justify-content: center; align-items: start;
+    padding-top: 100px;
     z-index: 1000;
   }
 

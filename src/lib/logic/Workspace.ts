@@ -1,32 +1,40 @@
 import { ChatBuffer } from './ChatBuffer';
 import { ChatWindow } from './ChatWindow';
-import type { ChannelIdentity, Message } from './types';
+import type { ChannelIdentity, Message, ServiceIdentity } from './types';
 
 type Listener = () => void;
 
 export class Workspace {
     private windows: Map<string, ChatWindow> = new Map();
-    // Map ChannelID -> ChannelIdentity Object
     private meta: Map<string, ChannelIdentity> = new Map();
     
-    activeChannelId: string = 'general';
+    // STRICT: activeChannel is always an Object
+    activeChannel: ChannelIdentity;
+    
+    // STRICT: Navigation stack holds Objects
+    private navigationStack: ChannelIdentity[] = [];
+    
     private listeners: Listener[] = [];
 
     constructor() {
-        // Initialize default
-        this.ensureChannelExists({
-            id: 'general',
-            name: 'general',
-            service: { id: 'sys', name: 'System' }
-        });
+        // Create the System Identity Object
+        const systemIdentity: ChannelIdentity = {
+            id: 'system',
+            name: 'System',
+            service: { id: 'internal', name: 'Solaria' }
+        };
+
+        // Bootstrap
+        this.ensureChannelExists(systemIdentity);
+        this.activeChannel = systemIdentity;
     }
 
-    // Now takes a structured object
+    // This method is the "Gateway" that ensures an Object is tracked
     private ensureChannelExists(identity: ChannelIdentity): boolean {
         let isNew = false;
-        const { id, name, service } = identity;
+        const { id } = identity;
 
-        // 1. Create Buffer/Window if missing
+        // 1. Create Window infrastructure if missing
         if (!this.windows.has(id)) {
             const buffer = new ChatBuffer();
             const window = new ChatWindow(buffer);
@@ -34,59 +42,104 @@ export class Workspace {
             isNew = true;
         }
 
-        // 2. Update Metadata
+        // 2. Update/Merge Metadata
         const existing = this.meta.get(id);
         
-        // Update if new, or if name/service details changed
-        if (!existing || existing.name !== name || existing.service.name !== service.name) {
+        if (!existing) {
             this.meta.set(id, identity);
+        } else {
+            // When merging, we prefer the NEW identity, but keep OLD context
+            // if the new one is "shallow" (e.g. created from a socket event)
+            this.meta.set(id, {
+                ...existing,
+                ...identity, // Overwrite name/service updates
+                // Preserve structural context
+                parentChannel: identity.parentChannel || existing.parentChannel,
+                threadId: identity.threadId || existing.threadId,
+                parentMessage: identity.parentMessage || existing.parentMessage,
+                isThread: identity.isThread || existing.isThread
+            });
         }
 
         return isNew;
     }
 
+    // STRICT: Only accepts Object. No strings allowed.
     openChannel(identity: ChannelIdentity) {
+        if (!identity || !identity.id) {
+            console.error("Workspace: Invalid identity passed to openChannel", identity);
+            return;
+        }
+
         const isNew = this.ensureChannelExists(identity);
-        
-        if (this.activeChannelId !== identity.id || isNew) {
-            this.activeChannelId = identity.id;
+
+        // Update Active Channel
+        // We use ID comparison, but store the Object
+        if (this.activeChannel.id !== identity.id) {
+            this.activeChannel = identity;
             this.notify();
         }
     }
 
-    // Helper for UI to open by ID only (if they don't have full object handy)
-    // We try to find existing metadata
-    openChannelById(channelId: string) {
-        const meta = this.meta.get(channelId);
-        if (meta) {
-            this.openChannel(meta);
-        } else {
-            console.warn(`Attempted to open unknown channel ${channelId}`);
+    // --- THREADING ---
+    openThread(parentMsg: Message, parentChannel: ChannelIdentity) {
+        const threadInternalId = `thread_${parentMsg.id}`;
+        
+        // We need the service info from the parent
+        const service = parentChannel.service;
+
+        this.navigationStack.push(this.activeChannel);
+
+        // Construct the Thread Identity Object
+        const threadIdentity: ChannelIdentity = {
+            id: threadInternalId,
+            name: 'Thread',
+            service: service,
+            isThread: true,
+            parentChannel: parentChannel, // Pass the OBJECT
+            threadId: parentMsg.id,
+            parentMessage: parentMsg
+        };
+
+        // Reuse openChannel logic
+        this.openChannel(threadIdentity);
+    }
+
+    goBack() {
+        const prev = this.navigationStack.pop();
+        if (prev) {
+            // We already have the object, so just switch
+            this.activeChannel = prev;
+            this.notify();
         }
     }
 
+    // --- MESSAGING ---
     dispatchMessage(channel: ChannelIdentity, msg: Message) {
         const isNew = this.ensureChannelExists(channel);
         
+        // Use ID for internal map lookup only
         const window = this.windows.get(channel.id);
         window?.buffer.addMessage(msg);
-
+        
         if (isNew) this.notify();
     }
     
-    // Returns full objects now
     getChannelList(): ChannelIdentity[] {
         return Array.from(this.meta.values());
     }
     
-    // ... Getters & Subscribe (Unchanged) ...
-    getActiveWindow(): ChatWindow { return this.windows.get(this.activeChannelId)!; }
+    getActiveWindow(): ChatWindow { 
+        // Safe lookup using the ID from the object
+        return this.windows.get(this.activeChannel.id)!; 
+    }
+
     getActiveBuffer(): ChatBuffer { return this.getActiveWindow().buffer; }
-    getBuffer(channelId: string): ChatBuffer | undefined { return this.windows.get(channelId)?.buffer; }
     
     subscribe(fn: Listener) {
         this.listeners.push(fn);
         return () => { this.listeners = this.listeners.filter(l => l !== fn); };
     }
+    
     private notify() { this.listeners.forEach(fn => fn()); }
 }

@@ -7,6 +7,10 @@ export interface ChannelIdentity {
     id: string;
     name: string;
     service: ServiceIdentity;
+    isThread?: boolean;
+    parentChannel?: ChannelIdentity;
+    threadId?: string; // The ID of the parent message
+    parentMessage?: Message;
 }
 
 export interface Message {
@@ -14,4 +18,6 @@ export interface Message {
     author: string;
     content: string;
     timestamp: Date;
+    reactions?: Any[];
+    replyCount?: number;
 }

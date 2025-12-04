@@ -12,72 +12,137 @@
 -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { status, connect, sendMessage } from './lib/socketStore';
+  import { status, connect, sendMessage, sendUpdate, sendDelete } from './lib/socketStore';
   import { chatStore } from './lib/stores/chat';
   import ChannelSwitcher from './lib/components/ChannelSwitcher.svelte';
   import Markdown from './lib/components/Markdown.svelte';
 
   // --- STATE ---
-  let inputElement: HTMLInputElement;
+  let inputElement: HTMLTextAreaElement;
   let messageListContainer: HTMLElement;
   let isInsertMode = false;
   let lastMessageCount = 0;
   let isWindowFocused = true;
   let unreadMarkerIndex = -1;
   
-  // Modal State
+  // Edit Mode State
+  let editingMessageId: string | null = null;
+
+  // Modal & Key State
   let showChannelSwitcher = false;
   let lastKeyTime = 0;
+  let lastKey = '';
   const LEADER_TIMEOUT = 400;
 
-  // --- LIFECYCLE ---
   onMount(() => {
     connect();
   });
 
   // --- LOGIC: COLOR HASHING ---
-  // Generates a consistent color from a string (Username)
-  function stringToColor(str: string) {
-      let hash = 0;
-      for (let i = 0; i < str.length; i++) {
-          hash = str.charCodeAt(i) + ((hash << 5) - hash);
-      }
-      // We map the hash to one of the Kanagawa palette colors
-      const colors = [
-          '#7E9CD8', '#98BB6C', '#938AA9', '#FF9E3B', '#E82424', '#6A9589', '#C8C093'
-      ];
-      const index = Math.abs(hash % colors.length);
-      return colors[index];
-  }
+function stringToColor(str: string) {
+    // FNV-1a Hash Algorithm
+    // This provides much better bit-mixing than the simple addition/shift
+    let hash = 2166136261; // 32-bit FNV offset basis
+    
+    for (let i = 0; i < str.length; i++) {
+        hash ^= str.charCodeAt(i);
+        // Math.imul is essential for correct 32-bit integer multiplication in JS/TS
+        hash = Math.imul(hash, 16777619); 
+    }
+
+    const colors = [
+        "#DCD7BA", "#C8C093", "#223249", "#938AA9", "#54546D", "#98BB6C", 
+        "#D27E99", "#FFA066", "#E6C384", "#b8b4d0", "#7E9CD8", "#957FB8", 
+        "#C0A36E", "#E46876", "#7AA89F", "#717C7C", "#727169", "#9CABCA", 
+        "#7FB4CA", "#FF5D62", "#76946A", "#C34043", "#DCA561", "#E82424", 
+        "#FF9E3B", "#658594", "#6A9589", "#16161D"
+    ];
+    
+    // We use >>> 0 to force the hash to be an unsigned integer before modulo
+    const index = (hash >>> 0) % colors.length;
+    
+    return colors[index];
+}
 
   // --- CONTROLLER ---
   function handleSend() {
-    if (inputElement.value.trim()) {
-      sendMessage(inputElement.value);
-      inputElement.value = ''; 
-      unreadMarkerIndex = -1;
-      inputElement.blur();
+    const text = inputElement.value.trim();
+    if (!text) return;
+
+    if (editingMessageId) {
+        sendUpdate(editingMessageId, text);
+        editingMessageId = null;
+    } else {
+        sendMessage(text);
+        unreadMarkerIndex = -1;
     }
+    
+    inputElement.value = ''; 
+    autoResize(); // Reset height
+    inputElement.blur();
+  }
+
+  function autoResize() {
+      if (!inputElement) return;
+      inputElement.style.height = 'auto';
+      inputElement.style.height = inputElement.scrollHeight + 'px';
+  }
+
+  function handleInputKeydown(e: KeyboardEvent) {
+      if (e.key === 'Enter') {
+          if (!e.shiftKey) {
+              e.stopPropagation();
+              e.preventDefault();
+              handleSend();
+          }
+          // Shift+Enter = New Line (default)
+      }
+      
+      if (e.key === 'Escape') {
+          e.stopPropagation();
+          if (editingMessageId) {
+              editingMessageId = null;
+              inputElement.value = '';
+              autoResize();
+          }
+          inputElement.blur();
+      }
+      
+      // Recalculate height on next tick
+      setTimeout(autoResize, 0); 
   }
 
   function handleGlobalKeydown(e: KeyboardEvent) {
     if (showChannelSwitcher) return;
+    if (isInsertMode) return; // Input handles its own keys
 
-    if (isInsertMode) {
-      if (e.key === 'Escape') inputElement.blur();
-      return; 
-    }
+    const now = Date.now();
 
-    // Leader Key (<Space><Space>)
+    // LEADER KEY (Space Space)
     if (e.key === ' ') {
-        const now = Date.now();
-        if (now - lastKeyTime < LEADER_TIMEOUT) {
+        if (now - lastKeyTime < LEADER_TIMEOUT && lastKey === ' ') {
             e.preventDefault();
             showChannelSwitcher = true;
             lastKeyTime = 0;
             return;
         }
         lastKeyTime = now;
+        lastKey = ' ';
+    }
+
+    // OPERATORS (cc, dd)
+    if (now - lastKeyTime < LEADER_TIMEOUT) {
+        if (e.key === 'c' && lastKey === 'c') {
+            e.preventDefault(); startEdit(); lastKey = ''; return;
+        }
+        if (e.key === 'd' && lastKey === 'd') {
+            e.preventDefault(); deleteMessage(); lastKey = ''; return;
+        }
+    }
+    
+    if (e.key !== ' ') {
+        lastKeyTime = now;
+        lastKey = e.key;
     }
 
     switch(e.key) {
@@ -93,17 +158,15 @@
         chatStore.moveCursor(-1);
         scrollToCursor();
         break;
-      case 'd':
-      case 'PageDown':
-        e.preventDefault();
-        chatStore.moveCursor(10);
-        scrollToCursor();
+      case 'd': 
+        if (e.ctrlKey) {
+             e.preventDefault(); chatStore.moveCursor(10); scrollToCursor();
+        }
         break;
-      case 'u':
-      case 'PageUp':
-        e.preventDefault();
-        chatStore.moveCursor(-10);
-        scrollToCursor();
+      case 'u': 
+        if (e.ctrlKey) {
+             e.preventDefault(); chatStore.moveCursor(-10); scrollToCursor();
+        }
         break;
       case 'G':
         if (e.shiftKey) {
@@ -115,7 +178,36 @@
         e.preventDefault();
         inputElement.focus();
         break;
+      case 'Enter':
+        e.preventDefault();
+        // Prevent recursive threading
+        if ($chatStore.activeChannel.id.startsWith('thread_')) return;
+        
+        const msg = $chatStore.messages[$chatStore.cursorIndex];
+        if (msg) chatStore.openThread(msg);
+        break;
+      case 'Backspace':
+        chatStore.goBack();
+        break;
     }
+  }
+
+  function startEdit() {
+      const msg = $chatStore.messages[$chatStore.cursorIndex];
+      // Simple auth check (expand later)
+      if (msg && msg.author === 'Me') {
+          editingMessageId = msg.id;
+          inputElement.value = msg.content;
+          autoResize();
+          inputElement.focus();
+      }
+  }
+
+  function deleteMessage() {
+      const msg = $chatStore.messages[$chatStore.cursorIndex];
+      if (msg && msg.author === 'Me') {
+          sendDelete(msg.id);
+      }
   }
 
   function onFocus() { isInsertMode = true; }
@@ -123,37 +215,51 @@
   function onWindowFocus() { isWindowFocused = true; }
   function onWindowBlur() {
      isWindowFocused = false;
-     if ($chatStore.isAttached) {
-        chatStore.detach();
-     }
+     if ($chatStore.isAttached) chatStore.detach();
   }
 
   const SCROLL_OFF = 150;
   async function scrollToCursor() {
       await tick();
       const activeEl = document.getElementById(`msg-${$chatStore.cursorIndex}`);
-      // if (activeEl) activeEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      
       if (activeEl && messageListContainer) {
-        const containerRect = messageListContainer.getBoundingClientRect();
-        const elRect = activeEl.getBoundingClientRect();
+          const containerRect = messageListContainer.getBoundingClientRect();
+          const elRect = activeEl.getBoundingClientRect();
 
-        const distTop = elRect.top - containerRect.top;
-        const distBottom = containerRect.bottom - elRect.bottom;
+          const distTop = elRect.top - containerRect.top;
+          const distBottom = containerRect.bottom - elRect.bottom;
 
-        if (distTop < SCROLL_OFF) {
-          const delta = distTop - SCROLL_OFF;
-          messageListContainer.scrollTop += delta;
-        } else if (distBottom < SCROLL_OFF) {
-          const delta = SCROLL_OFF - distBottom;
-          messageListContainer.scrollTop += delta;
-        }
+          let targetScroll = messageListContainer.scrollTop;
+          let needsScroll = false;
+
+          if (distTop < SCROLL_OFF) {
+              targetScroll -= (SCROLL_OFF - distTop);
+              needsScroll = true;
+          } 
+          else if (distBottom < SCROLL_OFF) {
+              targetScroll += (SCROLL_OFF - distBottom);
+              needsScroll = true;
+          }
+
+          if (needsScroll) {
+              messageListContainer.scrollTo({
+                  top: targetScroll,
+                  behavior: 'smooth'
+              });
+          }
       }
       checkReadStatus();
   }
 
   async function scrollToBottom() {
       await tick();
-      if (messageListContainer) messageListContainer.scrollTop = messageListContainer.scrollHeight;
+      if (messageListContainer) {
+          messageListContainer.scrollTo({ 
+              top: messageListContainer.scrollHeight, 
+              behavior: 'smooth' 
+          });
+      }
       checkReadStatus();
   }
 
@@ -171,50 +277,51 @@
       }
       checkReadStatus();
   }
-// --- READ STATUS LOGIC (The Ratchet) ---
+  
+  // High Water Mark Logic
   $: {
       const currentCursor = $chatStore.cursorIndex;
-      
-      // Only run if we actually have an active unread marker
       if (unreadMarkerIndex !== -1) {
-          
-          // 1. The High Water Mark Check
-          // If the cursor moves BELOW the current marker, push the marker down.
-          if (currentCursor > unreadMarkerIndex) {
-              unreadMarkerIndex = currentCursor;
-          }
-
-          // 2. Cleanup Check
-          // If the marker hits the very last message, clear it entirely.
-          // (User has read everything)
-          if (unreadMarkerIndex >= $chatStore.messages.length - 1) {
-              unreadMarkerIndex = -1;
-          }
+          if (currentCursor > unreadMarkerIndex) unreadMarkerIndex = currentCursor;
+          if (unreadMarkerIndex >= $chatStore.messages.length - 1) unreadMarkerIndex = -1;
       }
   }
 </script>
 
-<svelte:window 
-    on:keydown={handleGlobalKeydown} 
-    on:focus={onWindowFocus}
-    on:blur={onWindowBlur}
-/>
+<svelte:window on:keydown={handleGlobalKeydown} on:focus={onWindowFocus} on:blur={onWindowBlur} />
 
 <main class="cockpit">
-  
   <aside class="sidebar">
-      <div class="dot hot"></div>
-      <div class="dot warm"></div>
-      <div class="dot cold"></div>
-      <div class="dot cold"></div>
+      <!-- Placeholder Heatmap -->
+      <div class="dot hot"></div><div class="dot warm"></div><div class="dot cold"></div>
   </aside>
 
   <div class="buffer-container">
       
-      <div class="message-list" bind:this={messageListContainer}>
+      <!-- THREAD HEADER -->
+      {#if $chatStore.activeChannel?.id?.startsWith('thread_')}
+          <div class="thread-banner">
+              <div class="thread-meta">
+                  <span class="icon">⤴</span> 
+                  <span class="title">Thread</span>
+                  <span class="hint">[Backspace to return]</span>
+              </div>
+
+              {#if $chatStore.activeChannel.parentMessage}
+                  <div class="parent-context">
+                      <span class="parent-author">{$chatStore.activeChannel.parentMessage.author}:</span>
+                      <span class="parent-text">
+                        {$chatStore.activeChannel.parentMessage.content.slice(0, 100)}
+                        {$chatStore.activeChannel.parentMessage.content.length > 100 ? '...' : ''}
+                      </span>
+                  </div>
+              {/if}
+          </div>
+      {/if}
+
+      <div class="message-list" bind:this={messageListContainer} class:is-thread={$chatStore.activeChannel.id.startsWith('thread_')}>
         {#each $chatStore.messages as msg, index}
           {@const isUnread = unreadMarkerIndex !== -1 && index > unreadMarkerIndex}
-
           <div 
             id="msg-{index}"
             class="message-line" 
@@ -222,41 +329,54 @@
             class:unread={isUnread}
           >
             <div class="line-content">
+                <!-- COL 1: META -->
                 <span class="meta">
                     <span class="time">{msg.timestamp.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                     <span class="author" style="color: {stringToColor(msg.author)}">{msg.author}</span>
                 </span>
+                
+                <!-- COL 2: TEXT -->
                 <span class="text">
                     <Markdown content={msg.content} />
                 </span>
+
+                <!-- COL 3: INDICATORS (Right Aligned) -->
+                {#if msg.replyCount}
+                    <div class="indicators">
+                        <span class="reply-tag">
+                            {msg.replyCount} ⤴
+                        </span>
+                    </div>
+                {/if}
             </div>
           </div>
         {/each}
       </div>
 
       <div class="status-line">
-          <div class="section mode" class:insert={isInsertMode}>
-              {isInsertMode ? 'INSERT' : 'NORMAL'}
+          <div class="section mode" class:insert={isInsertMode} class:edit={editingMessageId !== null}>
+              {editingMessageId ? 'EDIT' : (isInsertMode ? 'INSERT' : 'NORMAL')}
           </div>
           <div class="section branch">
-               {$chatStore.activeChannelId}
+               {$chatStore.activeChannel.name.slice(0, 20)}
           </div>
-          <div class="section spacer">
+          <div class="section spacer input-wrapper">
               <span class="prompt">❯</span>
-              <input 
+              <textarea 
                   bind:this={inputElement}
-                  type="text" 
+                  rows="1"
                   on:focus={onFocus}
                   on:blur={onBlur}
-                  on:keydown={(e) => e.key === 'Enter' && handleSend()}
-                  autocomplete="off"
-              />
+                  on:input={autoResize}
+                  on:keydown={handleInputKeydown}
+                  spellcheck="false"
+              ></textarea>
           </div>
           <div class="section info">
                {$chatStore.cursorIndex + 1}:{$chatStore.messages.length} 
           </div>
-          <div class="section encoding">
-              utf-8
+          <div class="section logo-container">
+              <span style="color: var(--ronin-yellow); font-size: 1.2em;">⬢</span>
           </div>
       </div>
   </div>
@@ -268,107 +388,64 @@
 
 <style>
   :root {
-    /* KANAGAWA PALETTE */
     --sumi-ink-0: #16161D; --sumi-ink-1: #1F1F28; --sumi-ink-2: #2A2A37;
     --sumi-ink-3: #363646; --fuji-white: #DCD7BA; --katana-gray: #727169;
     --crystal-blue: #7E9CD8; --spring-green: #98BB6C; --ronin-yellow: #FF9E3B;
-    --samurai-red: #E82424; --wave-blue: #2D4F67; --winter-green: #2B3328;
-    
-    --font-main: "CodeNewRoman Nerd Font", 'JetBrains Mono', 'Fira Code', monospace; 
-
+    --samurai-red: #E82424; --wave-blue: #2D4F67; 
+    --font-main: "CodeNewRoman Nerd Font", 'JetBrains Mono', monospace; 
   }
 
-  /* RESET & LAYOUT */
-  .cockpit {
-      display: flex; height: 100vh; width: 100vw;
-      background: var(--sumi-ink-1); color: var(--fuji-white);
-      font-family: var(--font-main); overflow: hidden;
-  }
-
-  /* SIDEBAR (Heatmap) */
-  .sidebar {
-      width: 12px;
-      background: var(--sumi-ink-0);
-      border-right: 1px solid var(--sumi-ink-2);
-      display: flex; flex-direction: column; align-items: center;
-      padding-top: 10px; gap: 8px;
-  }
+  .cockpit { display: flex; height: 100vh; width: 100vw; background: var(--sumi-ink-1); color: var(--fuji-white); font-family: var(--font-main); overflow: hidden; }
+  
+  .sidebar { width: 12px; background: var(--sumi-ink-0); border-right: 1px solid var(--sumi-ink-2); display: flex; flex-direction: column; align-items: center; padding-top: 10px; gap: 8px; }
   .dot { width: 4px; height: 4px; border-radius: 50%; }
   .dot.hot { background: var(--samurai-red); box-shadow: 0 0 4px var(--samurai-red); }
   .dot.warm { background: var(--ronin-yellow); }
   .dot.cold { background: var(--sumi-ink-3); }
 
-  /* MAIN AREA */
-  .buffer-container {
-      flex-grow: 1; display: flex; flex-direction: column; position: relative;
-  }
+  .buffer-container { flex-grow: 1; display: flex; flex-direction: column; position: relative; }
 
-  /* MESSAGES */
-  .message-list {
-      flex-grow: 1; overflow-y: auto; padding-top: 50px; /* Space for fade */
-      display: flex; flex-direction: column;
-      
-      /* The Fade Mask */
-      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 50px, black 100%);
-      mask-image: linear-gradient(to bottom, transparent 0%, black 50px, black 100%);
-  }
+  /* THREAD BANNER */
+  .thread-banner { background: var(--sumi-ink-2); border-bottom: 1px solid var(--sumi-ink-3); padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; z-index: 10; }
+  .thread-meta { display: flex; align-items: center; gap: 10px; font-size: 0.8rem; color: var(--ronin-yellow); }
+  .thread-meta .hint { color: var(--katana-gray); font-style: italic; margin-left: auto; }
+  
+  .parent-context { background: rgba(0, 0, 0, 0.2); padding: 6px; border-left: 2px solid var(--crystal-blue); font-size: 0.85rem; display: flex; gap: 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .parent-author { font-weight: bold; color: var(--crystal-blue); }
+  .parent-text { color: var(--fuji-white); opacity: 0.8; overflow: hidden; text-overflow: ellipsis; }
 
-  .message-line {
-      display: flex; padding: 2px 10px;
-      border-left: 2px solid transparent; /* The Gutter Marker */
-      opacity: 0.7; /* Default: Semantically dim */
-      transition: all 0.1s ease;
-  }
+  /* MESSAGE LIST */
+  .message-list { flex-grow: 1; overflow-y: auto; padding-top: 50px; display: flex; flex-direction: column; -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 50px, black 100%); mask-image: linear-gradient(to bottom, transparent 0%, black 50px, black 100%); }
+  .message-list.is-thread { background-color: #1a1a22; padding-top: 10px; -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 20px, black 100%); mask-image: linear-gradient(to bottom, transparent 0%, black 20px, black 100%); }
 
-  .message-line.active {
-      background: var(--sumi-ink-2);
-      border-left-color: var(--crystal-blue);
-      opacity: 1; /* Focus: Bright */
-  }
-
-  .message-line.unread {
-      border-left-color: var(--samurai-red);
-      background: #25252f; /* Very subtle tint */
-  }
+  .message-line { display: flex; padding: 1px 10px; border-left: 2px solid transparent; opacity: 0.7; transition: all 0.1s ease; }
+  .message-line.active { background: var(--sumi-ink-2); border-left-color: var(--crystal-blue); opacity: 1; }
+  .message-line.unread { border-left-color: var(--samurai-red); background: #25252f; }
 
   .line-content { display: flex; gap: 12px; align-items: baseline; width: 100%; }
   
-  .meta { 
-      min-width: 140px; text-align: right; 
-      font-size: 0.8rem; color: var(--katana-gray);
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .time { margin-right: 8px; font-variant-numeric: tabular-nums; opacity: 0.5; }
+  .meta { min-width: 140px; text-align: right; font-size: 0.8rem; color: var(--katana-gray); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
   .author { font-weight: bold; }
-
-  .text { 
-      white-space: pre-wrap; word-break: break-word; flex-grow: 1;
-      line-height: 1.5;
-  }
-
-  /* STATUS BAR (Lualine style) */
-  .status-line {
-      height: 24px; display: flex; align-items: center;
-      background: var(--sumi-ink-0); border-top: 1px solid var(--sumi-ink-3);
-      font-size: 0.8rem;
-  }
-
-  .section { padding: 0 10px; height: 100%; display: flex; align-items: center; }
   
+  .text { flex-grow: 1; word-break: break-word; min-width: 0; line-height: 1.3; }
+
+  /* INDICATORS (Right Column) */
+  .indicators { margin-left: auto; display: flex; align-items: center; gap: 5px; flex-shrink: 0; transform: translateY(1px); }
+  .reply-tag { display: inline-flex; align-items: center; font-size: 0.75rem; color: var(--ronin-yellow); background: rgba(255, 158, 59, 0.05); padding: 0 6px; border-radius: 2px; font-family: var(--font-main); line-height: 1; height: 1.2em; }
+  .message-line.active .reply-tag { background: var(--ronin-yellow); color: var(--sumi-ink-0); }
+
+  /* STATUS BAR */
+  .status-line { min-height: 24px; display: flex; align-items: stretch; background: var(--sumi-ink-0); border-top: 1px solid var(--sumi-ink-3); font-size: 0.8rem; padding: 1px 0; }
+  .section { padding: 0 10px; display: flex; align-items: center; }
   .mode { background: var(--crystal-blue); color: var(--sumi-ink-0); font-weight: bold; }
   .mode.insert { background: var(--spring-green); }
-  
+  .mode.edit { background: var(--ronin-yellow); }
   .branch { background: var(--sumi-ink-2); color: var(--fuji-white); }
+  .spacer { flex-grow: 1; display: flex; background: var(--sumi-ink-1); }
+  .input-wrapper { display: flex; align-items: center; padding-top: 2px; }
   
-  .spacer { flex-grow: 1; display: flex; gap: 8px; background: var(--sumi-ink-1); }
-  
-  .info, .encoding { background: var(--sumi-ink-2); color: var(--fuji-white); }
-
-  /* INPUT (Hidden inside status bar) */
-  input {
-      background: transparent; border: none; outline: none;
-      color: var(--fuji-white); font-family: inherit; font-size: 0.9rem;
-      width: 100%;
-  }
-  .prompt { color: var(--crystal-blue); font-weight: bold; }
+  textarea { background: transparent; border: none; outline: none; color: var(--fuji-white); font-family: inherit; font-size: 0.9rem; width: 100%; resize: none; overflow: hidden; padding: 0; margin: 0; line-height: 1.5; display: block; height: 1.5em; }
+  .prompt { color: var(--crystal-blue); font-weight: bold; margin-right: 8px; align-self: flex-start; margin-top: 1px; }
+  .info { background: var(--sumi-ink-2); color: var(--fuji-white); }
+  .logo-container { background: var(--sumi-ink-1); }
 </style>
