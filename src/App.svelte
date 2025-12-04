@@ -195,7 +195,7 @@ function stringToColor(str: string) {
   function startEdit() {
       const msg = $chatStore.messages[$chatStore.cursorIndex];
       // Simple auth check (expand later)
-      if (msg && msg.author === 'Me') {
+      if (msg && chatStore.isMyMessage(msg)) {
           editingMessageId = msg.id;
           inputElement.value = msg.content;
           autoResize();
@@ -205,7 +205,7 @@ function stringToColor(str: string) {
 
   function deleteMessage() {
       const msg = $chatStore.messages[$chatStore.cursorIndex];
-      if (msg && msg.author === 'Me') {
+      if (msg && chatStore.isMyMessage(msg)) {
           sendDelete(msg.id);
       }
   }
@@ -332,7 +332,7 @@ function stringToColor(str: string) {
                 <!-- COL 1: META -->
                 <span class="meta">
                     <span class="time">{msg.timestamp.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-                    <span class="author" style="color: {stringToColor(msg.author)}">{msg.author}</span>
+                    <span class="author" style="color: {stringToColor(msg.author)}">{msg.author.name}</span>
                 </span>
                 
                 <!-- COL 2: TEXT -->

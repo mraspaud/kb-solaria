@@ -105,7 +105,11 @@ export function connect() {
             
             logToSystem(payload["event"]);
             // ----------------------
-
+            // 0. HANDSHAKE
+            if (payload.event === 'self_info') {
+                chatStore.setIdentity(payload.user);
+                logToSystem(`Identity established: ${payload.user.name} (${payload.user.id})`);
+            }
             // 1. HANDLE CHANNEL LIST
             if (payload.event === 'channel_list') {
                 const service = payload.service || { name: 'Unknown', id: 'unknown' };
@@ -150,10 +154,15 @@ export function connect() {
                 }
                 chatStore.dispatchMessage(channelIdentity, {
                     id: msgData.id,
-                    author: msgData.author?.display_name || 'Unknown',
+                    author: {
+                        id: msgData.author?.id || 'unknown',
+                        name: msgData.author?.display_name || 'Unknown',
+                        color: msgData.author?.color // Backend sends hex color
+                    },
                     content: msgData.body,
                     timestamp: new Date(msgData.timestamp),
-                    replyCount: reply_count
+                    replyCount: reply_count,
+                    reactions: msgData.reactions || {}
                 });
             }
             
@@ -195,8 +204,8 @@ export function sendMessage(text: string) {
         if (meta.id.startsWith('thread_')) {
             payload = {
                 command: "post_reply",
-                service: meta?.service,
-                channel: meta?.parentChannel,
+                service_id: meta?.service.id,
+                channel_id: meta.parentChannel?.id,
                 thread_id: meta?.threadId,
                 body: text
             };
@@ -217,28 +226,46 @@ export function sendUpdate(id: string, newText: string) {
     const state = get(chatStore);
     const meta = state.activeChannel;
     
+    const realChannelId = meta.id.startsWith('thread_') 
+        ? meta.parentChannel?.id 
+        : meta.id;
+
+    if (!realChannelId) return; // Safety check
+
     const payload = {
         command: "message_update",
-        channel: meta,
+        service_id: meta.service.id, // Required for routing
+        channel_id: realChannelId,   // Required string
         message_id: id,
-        message: { body: newText }
+        body: newText                // Flattened: backend expects cmd["body"]
     };
+    
     socket?.send(JSON.stringify(payload));
     
+    // Optimistic Update
     chatStore.updateMessage(id, newText);
 }
 
 export function sendDelete(id: string) {
     const state = get(chatStore);
     const meta = state.activeChannel;
+    
+    const realChannelId = meta.id.startsWith('thread_') 
+        ? meta.parentChannel?.id 
+        : meta.id;
+
+    if (!realChannelId) return;
 
     const payload = {
         command: "message_delete",
-        channel: meta,
+        service_id: meta.service.id, // Required for routing
+        channel_id: realChannelId,   // Required string
         message_id: id
     };
+    
     socket?.send(JSON.stringify(payload));
     
+    // Optimistic Update
     chatStore.removeMessage(id);
 }
 
@@ -252,4 +279,25 @@ export function fetchThread(channel: ChannelIdentity, threadId: string, service:
         };
         socket.send(JSON.stringify(payload));
     }
+}
+
+export function sendReaction(msgId: string, emoji: string, action: 'add' | 'remove' = 'add') {
+    const state = get(chatStore);
+    const meta = state.activeChannel;
+    const me = state.currentUser;
+
+    if (!me) return;
+
+    const payload = {
+        command: "react",
+        service_id: meta.service.id,
+        channel_id: meta.id.startsWith('thread_') ? meta.parentChannel?.id : meta.id,
+        message_id: msgId,
+        reaction: emoji,
+        action: action
+    };
+    socket?.send(JSON.stringify(payload));
+    
+    // OPTIMISTIC UPDATE: Use me.id
+    chatStore.handleReaction(meta.id, msgId, emoji, me.id, action);
 }

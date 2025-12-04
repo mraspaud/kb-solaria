@@ -1,6 +1,6 @@
 import { writable, get } from 'svelte/store';
 import { Workspace } from '../logic/Workspace';
-import type { ChannelIdentity, Message } from '../logic/types';
+import type { ChannelIdentity, Message, UnreadState, UserIdentity } from '../logic/types';
 
 interface ChatState {
     activeChannel: ChannelIdentity;
@@ -8,33 +8,30 @@ interface ChatState {
     messages: Message[];
     cursorIndex: number;
     isAttached: boolean;
+    unread: Record<string, UnreadState>;
+    currentUser: UserIdentity | null;
 }
 
 function createChatStore() {
     const workspace = new Workspace();
-
-    // Define Initial Channels
+    
     const systemChannel: ChannelIdentity = {
         id: 'system',
         name: 'system',
         service: { id: 'internal', name: 'Solaria' }
     };
 
-    // Initialize Store
     const store = writable<ChatState>({
-        // CHANGED: Default to system for introspection
-        activeChannel: systemChannel, 
-        
-        availableChannels: [systemChannel], 
+        activeChannel: systemChannel,
+        availableChannels: [systemChannel],
         messages: [],
         cursorIndex: -1,
-        isAttached: true
+        isAttached: true,
+        unread: {},
+        currentUser: null
     });
 
-    // Ensure Workspace tracks them
     workspace.openChannel(systemChannel);
-    
-    // Set the workspace active channel to match the store default
     workspace.activeChannel = systemChannel;
 
     let activeBufferUnsubscribe: (() => void) | null = null;
@@ -47,15 +44,10 @@ function createChatStore() {
 
         store.update(s => ({
             ...s, 
-            
-            // Sync these from Workspace
             activeChannel: workspace.activeChannel,
             messages: buf.messages,
             cursorIndex: win.cursorIndex,
             isAttached: win.isAttached,
-            
-            // DO NOT OVERWRITE availableChannels with workspace.getChannelList()
-            // The Workspace only knows about OPEN tabs. The Store knows about the WORLD.
         }));
     };
 
@@ -65,25 +57,97 @@ function createChatStore() {
     });
 
     function setupActiveBufferListener() {
-        if (activeBufferUnsubscribe) {
-            activeBufferUnsubscribe();
-        }
+        if (activeBufferUnsubscribe) activeBufferUnsubscribe();
         activeBufferUnsubscribe = workspace.getActiveBuffer().subscribe(() => {
             syncState();
         });
     }
 
-    // Initialize listener
-    setupActiveBufferListener();
-    syncState();
+    // setupActiveBufferListener();
+    // syncState();
 
     return {
         subscribe: store.subscribe,
         
         dispatchMessage: (channel: ChannelIdentity, msg: Message) => {
             workspace.dispatchMessage(channel, msg);
+            store.update(s => {
+                // Unread Logic
+                if (channel.id !== s.activeChannel.id) {
+                    const current = s.unread[channel.id] || { count: 0, hasMention: false };
+                    
+                    let isMention = false;
+                    if (s.currentUser) {
+                         // Check against name and ID
+                         isMention = msg.content.includes(`@${s.currentUser.name}`) || 
+                                     msg.content.includes(`@${s.currentUser.id}`);
+                    }
+
+                    return {
+                        ...s,
+                        unread: {
+                            ...s.unread,
+                            [channel.id]: {
+                                count: current.count + 1,
+                                hasMention: current.hasMention || isMention
+                            }
+                        }
+                    };
+                }
+                return s;
+            });
         },
-        
+        handleReaction: (channelId: string, msgId: string, emoji: string, userId: string, action: 'add' | 'remove') => {
+             const buf = workspace.getActiveBuffer(); 
+             const msg = buf.messages.find(m => m.id === msgId);
+             if (msg) {
+                if (!msg.reactions) msg.reactions = {};
+                let users = msg.reactions[emoji] || [];
+                if (action === 'add') {
+                    if (!users.includes(userId)) users.push(userId);
+                } else {
+                    users = users.filter(u => u !== userId);
+                }
+                if (users.length > 0) msg.reactions[emoji] = users;
+                else delete msg.reactions[emoji];
+                syncState();
+             }
+        },
+        // handleReaction: (channelId: string, msgId: string, emoji: string, userId: string, action: 'add' | 'remove') => {
+        //     // 1. We need to find the message in the workspace buffers
+        //     // Since `Workspace` doesn't expose getBuffer by ID easily, we cheat slightly:
+        //     // We assume the user is likely looking at the channel, or we find it if open.
+        //
+        //     // TODO: Expose `workspace.windows.get(channelId)` properly.
+        //     // For now, let's assume we primarily update the ACTIVE buffer to reflect UI immediately.
+        //     const currentId = get(store).activeChannel.id;
+        //
+        //     if (channelId === currentId || !channelId) {
+        //         const buffer = workspace.getActiveBuffer();
+        //         const msg = buffer.messages.find(m => m.id === msgId);
+        //
+        //         if (msg) {
+        //             if (!msg.reactions) msg.reactions = {};
+        //             let users = msg.reactions[emoji] || [];
+        //
+        //             if (action === 'add') {
+        //                 if (!users.includes(userId)) users.push(userId);
+        //             } else {
+        //                 users = users.filter(u => u !== userId);
+        //             }
+        //
+        //             if (users.length > 0) {
+        //                 msg.reactions[emoji] = users;
+        //             } else {
+        //                 delete msg.reactions[emoji];
+        //             }
+        //
+        //             // Trigger Svelte update
+        //             syncState();
+        //         }
+        //     }
+        // },
+
         moveCursor: (delta: number) => {
             workspace.getActiveWindow().moveCursor(delta);
             syncState(); 
@@ -95,10 +159,15 @@ function createChatStore() {
         },
 
         switchChannel: (channel: ChannelIdentity) => {
-            if (!channel) {
-                console.error("Store: switchChannel called with null/undefined");
-                return;
-            }
+            if (!channel) return;
+            
+            // CLEAR UNREADS ON SWITCH
+            store.update(s => {
+                const newUnread = { ...s.unread };
+                delete newUnread[channel.id];
+                return { ...s, unread: newUnread };
+            });
+
             workspace.openChannel(channel);
         },
 
@@ -140,7 +209,6 @@ function createChatStore() {
                 
                 for (const ch of newChannels) {
                     const existing = channelMap.get(ch.id);
-                    // Merge logic similar to workspace
                     if (existing) {
                         channelMap.set(ch.id, { ...existing, ...ch });
                     } else {
@@ -149,6 +217,16 @@ function createChatStore() {
                 }
                 return { ...s, availableChannels: Array.from(channelMap.values()) };
             });
+        },
+
+        setIdentity: (user: { id: string; name: string }) => {
+            store.update(s => ({ ...s, currentUser: user }));
+        },
+        
+        isMyMessage: (msg: Message) => {
+            const state = get(store);
+            if (!state.currentUser) return false;
+            return msg.author.id === state.currentUser.id;
         }
     };
 }
