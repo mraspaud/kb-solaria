@@ -8,18 +8,23 @@ let socket: WebSocket | null = null;
 let reconnectTimer: number | undefined;
 let lastSyncedChannelId: string | null = null; // Track this to avoid duplicate sends
 
+const loggerUser = { 
+    id: 'system-logger', 
+    name: 'Logger', 
+    color: '#727169' // katana-gray
+};
+
 // Helper to log debug events
 function logToSystem(payload: any) {
     const systemIdentity: ChannelIdentity = { 
         id: 'system', name: 'system', service: { id: 'internal', name: 'Solaria' } 
     };
-
     // Format the payload as a nice JSON code block
     const content = "```json\n" + JSON.stringify(payload, null, 2) + "\n```";
     
     chatStore.dispatchMessage(systemIdentity, {
         id: crypto.randomUUID(),
-        author: 'Logger',
+        author: loggerUser,
         content: content,
         timestamp: new Date()
     });

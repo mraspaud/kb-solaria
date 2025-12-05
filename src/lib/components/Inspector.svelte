@@ -1,6 +1,7 @@
 <script lang="ts">
   import { inspectorStore } from '../stores/inspector';
   import { chatStore } from '../stores/chat';
+  import Directory from './inspector/Directory.svelte';
   
   // Placeholder sub-components (we'll scaffold these next)
   // import Constellation from './inspector/Constellation.svelte';
@@ -38,6 +39,8 @@
             </div>
         {:else if $inspectorStore === 'LABORATORY'}
             <textarea class="scratchpad" placeholder="-- VI MODE ACTIVE --"></textarea>
+        {:else if $inspectorStore === 'DIRECTORY'}
+            <Directory />
         {/if}
     </div>
 </aside>
@@ -46,6 +49,7 @@
     .inspector-pane {
         /* Fixed 38% width for the Golden Ratio split */
         width: 38%; 
+        flex-shrink: 0;
         background: var(--sumi-ink-0);
         border-left: 1px solid var(--sumi-ink-3);
         display: flex;

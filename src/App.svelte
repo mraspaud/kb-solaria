@@ -12,15 +12,18 @@
   import { onMount, tick } from 'svelte';
   import { status, connect, sendMessage, sendUpdate, sendDelete } from './lib/socketStore';
   import { chatStore } from './lib/stores/chat';
+  import { sendReaction } from './lib/socketStore';
+  import { inspectorStore } from './lib/stores/inspector';
+  import { inputEngine } from './lib/stores/input';
+
   import ChannelSwitcher from './lib/components/ChannelSwitcher.svelte';
   import Markdown from './lib/components/Markdown.svelte';
   import ReactionPicker from './lib/components/ReactionPicker.svelte';
-  import { sendReaction } from './lib/socketStore';
   import Inspector from './lib/components/Inspector.svelte';
-  import { inspectorStore } from './lib/stores/inspector';
+  import InputGhost from './lib/components/InputGhost.svelte';
 
   // --- STATE ---
-  let inputElement: HTMLTextAreaElement;
+  let inputComponent: InputGhost;
   let messageListContainer: HTMLElement;
   let isInsertMode = false;
   let lastMessageCount = 0;
@@ -118,7 +121,7 @@ function stringToColor(str: string) {
   function handleGlobalKeydown(e: KeyboardEvent) {
     if (showChannelSwitcher) return;
     if (isInsertMode) return; // Input handles its own keys
-
+    const isReadOnly = $chatStore.activeChannel.id === 'system';
     const now = Date.now();
 
     // LEADER KEY (Space Space)
@@ -136,9 +139,11 @@ function stringToColor(str: string) {
     // OPERATORS (cc, dd)
     if (now - lastKeyTime < LEADER_TIMEOUT) {
         if (e.key === 'c' && lastKey === 'c') {
+            if (isReadOnly) return;
             e.preventDefault(); startEdit(); lastKey = ''; return;
         }
         if (e.key === 'd' && lastKey === 'd') {
+            if (isReadOnly) return;
             e.preventDefault(); deleteMessage(); lastKey = ''; return;
         }
         if (e.key === 'e' && lastKey === ' ') {
@@ -188,8 +193,9 @@ function stringToColor(str: string) {
         }
         break;
       case 'i':
+        if (isReadOnly) return;
         e.preventDefault();
-        inputElement.focus();
+        inputComponent.focus();
         break;
       case 'Enter':
         e.preventDefault();
@@ -210,9 +216,8 @@ function stringToColor(str: string) {
       // Simple auth check (expand later)
       if (msg && chatStore.isMyMessage(msg)) {
           editingMessageId = msg.id;
-          inputElement.value = msg.content;
-          autoResize();
-          inputElement.focus();
+          inputEngine.update(msg.content, msg.content.length); 
+          inputComponent.focus();
       }
   }
 
@@ -398,17 +403,14 @@ function stringToColor(str: string) {
           <div class="section branch">
                {$chatStore.activeChannel.name.slice(0, 20)}
           </div>
-          <div class="section spacer input-wrapper">
+          <div class="section spacer input-wrapper" 
+               on:focusin={onFocus} 
+               on:focusout={onBlur}>
+
               <span class="prompt">❯</span>
-              <textarea 
-                  bind:this={inputElement}
-                  rows="1"
-                  on:focus={onFocus}
-                  on:blur={onBlur}
-                  on:input={autoResize}
-                  on:keydown={handleInputKeydown}
-                  spellcheck="false"
-              ></textarea>
+
+              <InputGhost bind:this={inputComponent} />
+              
           </div>
           <div class="section info">
                {$chatStore.cursorIndex + 1}:{$chatStore.messages.length} 
@@ -448,7 +450,13 @@ function stringToColor(str: string) {
   .dot.warm { background: var(--ronin-yellow); }
   .dot.cold { background: var(--sumi-ink-3); }
 
-  .buffer-container { flex-grow: 1; display: flex; flex-direction: column; position: relative; }
+  .buffer-container {
+          flex-grow: 1; 
+          min-width: 0;
+          display: flex; 
+          flex-direction: column; 
+          position: relative;
+  }
 
   /* THREAD BANNER */
   .thread-banner { background: var(--sumi-ink-2); border-bottom: 1px solid var(--sumi-ink-3); padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; z-index: 10; }
@@ -488,8 +496,6 @@ function stringToColor(str: string) {
   .branch { background: var(--sumi-ink-2); color: var(--fuji-white); }
   .spacer { flex-grow: 1; display: flex; background: var(--sumi-ink-1); }
   .input-wrapper { display: flex; align-items: center; padding-top: 2px; }
-  
-  textarea { background: transparent; border: none; outline: none; color: var(--fuji-white); font-family: inherit; font-size: 0.9rem; width: 100%; resize: none; overflow: hidden; padding: 0; margin: 0; line-height: 1.5; display: block; height: 1.5em; }
   .prompt { color: var(--crystal-blue); font-weight: bold; margin-right: 8px; align-self: flex-start; margin-top: 1px; }
   .info { background: var(--sumi-ink-2); color: var(--fuji-white); }
   .logo-container { background: var(--sumi-ink-1); }

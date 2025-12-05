@@ -198,7 +198,19 @@ function createChatStore() {
 
         removeMessage: (id: string) => {
             const buffer = workspace.getActiveBuffer();
+            const win = workspace.getActiveWindow();
             buffer.messages = buffer.messages.filter(m => m.id !== id);
+            const maxIndex = buffer.messages.length - 1;
+
+            if (win.cursorIndex > maxIndex) {
+                win.cursorIndex = maxIndex;
+            }
+            
+            if (maxIndex < 0) {
+                win.cursorIndex = -1;
+            }
+
+            win.isAttached = (win.cursorIndex === maxIndex);
             syncState();
         },
 
