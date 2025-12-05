@@ -7,7 +7,16 @@ export class ChatBuffer {
     private listeners: Listener[] = [];
 
     addMessage(msg: Message) {
-        this.messages.push(msg);
+        const existingIndex = this.messages.findIndex(m => m.id === msg.id);
+
+        if (existingIndex !== -1) {
+            this.messages[existingIndex] = { ...this.messages[existingIndex], ...msg };
+        } else {
+            this.messages.push(msg);
+ 
+            this.messages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+        }
+
         this.notify();
     }
 

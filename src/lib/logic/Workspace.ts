@@ -135,7 +135,18 @@ export class Workspace {
     }
 
     getActiveBuffer(): ChatBuffer { return this.getActiveWindow().buffer; }
-    
+    getBuffer(id: string): ChatBuffer { return this.windows.get(id)?.buffer; }
+
+    getLastMessageId(channel: ChannelIdentity): string | undefined {
+        const window = this.windows.get(channel.id);
+        if (!window) return undefined;
+        
+        const msgs = window.buffer.messages;
+        if (msgs.length === 0) return undefined;
+        
+        return msgs[msgs.length - 1].id;
+    }
+
     subscribe(fn: Listener) {
         this.listeners.push(fn);
         return () => { this.listeners = this.listeners.filter(l => l !== fn); };

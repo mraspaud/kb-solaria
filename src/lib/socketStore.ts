@@ -27,37 +27,31 @@ function logToSystem(payload: any) {
 
 export function sendChannelSwitch(channel: ChannelIdentity) {
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    
-    // Don't send updates for internal system channels
     if (channel.service.id === 'internal') return;
+
+    const lastId = chatStore.getLastMessageId(channel);
 
     let payload: any;
 
-    // CHECK: Is this a thread?
-    // We check for the flag AND the existence of the threadId/parentChannel
     if (channel.isThread && channel.threadId && channel.parentChannel) {
-        
         payload = {
             command: "fetch_thread",
             service_id: channel.service.id,
-            
-            // For a thread, the 'channel_id' context is usually the Parent Channel
             channel_id: channel.parentChannel.id,
-            
-            // The specific message we are threading on
-            thread_id: channel.threadId
+            thread_id: channel.threadId,
+            after: lastId 
         };
-
     } else {
-        // Default: Regular Channel Switch
         payload = {
             command: "switch_channel",
             service_id: channel.service.id,
-            channel_id: channel.id
+            channel_id: channel.id, 
+            after: lastId 
         };
     }
+    
     socket.send(JSON.stringify(payload));
-    lastSyncedChannelId = channel.id; // Mark as synced
+    lastSyncedChannelId = channel.id;
 }
 
 // --- AUTOMATIC SYNC SUBSCRIPTION ---

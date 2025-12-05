@@ -202,6 +202,10 @@ function createChatStore() {
             syncState();
         },
 
+        getLastMessageId: (channel: ChannelIdentity): string | undefined => {
+             return workspace.getLastMessageId(channel);
+        },
+
         upsertChannels: (newChannels: ChannelIdentity[]) => {
             store.update(s => {
                 const currentChannels = s.availableChannels || [];
