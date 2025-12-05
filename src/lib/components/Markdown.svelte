@@ -1,7 +1,9 @@
 <script lang="ts">
   import { Marked } from 'marked';
   import hljs from 'highlight.js/lib/core';
-  
+  // Imports for validation
+  import { chatStore } from '../stores/chat';
+  import { users } from '../stores/input'; 
   // Register languages
   import python from 'highlight.js/lib/languages/python';
   import typescript from 'highlight.js/lib/languages/typescript';
@@ -16,6 +18,40 @@
   hljs.registerLanguage('markdown', markdown);
 
   export let content: string = "";
+
+  let validUsers = new Set<string>();
+
+  $: {
+      validUsers.clear();
+      $users.forEach(u => validUsers.add(u.name));
+  }
+  
+  const mentionExtension = {
+    name: 'mention',
+    level: 'inline',
+    start(src: string) { return src.match(/@[a-zA-Z0-9_\- ]/)?.index; },
+    tokenizer(src: string) {
+        // Match @Name (allowing spaces, but stopping at punctuation/newlines)
+        // Regex logic: @ followed by words, stopping before typical punctuation
+        const rule = /^@([a-zA-Z0-9_\-\.]+)/;
+        const match = rule.exec(src);
+        if (match) {
+            return {
+                type: 'mention',
+                raw: match[0],
+                text: match[1].trim() // The name without @
+            };
+        }
+    },
+    renderer(token: any) {
+        // Render as a semantic span we can style
+        if (validUsers.has(token.text)) {
+            return `<span class="mention">${token.text}</span>`;
+        } else {
+            return `@${token.text}`; // Plain text return
+        }
+    }
+  };
 
   const parser = new Marked({
     // 1. LOGIC FIX: Turn 'Enter' into <br>
@@ -33,6 +69,8 @@
       }
     }
   });
+
+  parser.use({ extensions: [mentionExtension] });
 
   let html = "";
 
@@ -111,4 +149,23 @@
   :global(.hljs-comment) { color: var(--katana-gray); font-style: italic; }
   :global(.hljs-operator) { color: var(--boat-yellow); }
   :global(.hljs-built_in) { color: var(--wave-blue); }
+  :global(.mention) {
+      color: var(--sumi-ink-0);
+      background-color: var(--ronin-yellow); /* High contrast highlight */
+      font-weight: bold;
+      padding: 0 4px;
+      border-radius: 3px;
+      display: inline-block;
+      line-height: 1.2;
+      font-size: 0.9em;
+      margin: 0 1px;
+      transform: translateY(-1px);
+  }
+/*  :global(.mention) {
+      color: var(--ronin-yellow);
+      background: rgba(255, 158, 59, 0.1);
+      font-weight: bold;
+      padding: 0 2px;
+      border-radius: 3px;
+  } */
 </style>

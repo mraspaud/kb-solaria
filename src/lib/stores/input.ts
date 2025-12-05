@@ -24,11 +24,9 @@ interface InputState {
 const EMOJIS = ["thumbsup", "thumbsdown", "fire", "rocket", "eyes", "check_mark", "x", "tada", "joy", "heart", "sob", "thinking"];
 
 // 2. Users (Derived from Message History for now)
-const users = derived(chatStore, $s => {
+export const users = derived(chatStore, $s => {
     const unique = new Map();
-    // Add current user
     if($s.currentUser) unique.set($s.currentUser.id, $s.currentUser);
-    // Add authors from loaded messages
     $s.messages.forEach(m => unique.set(m.author.id, m.author));
     return Array.from(unique.values());
 });
@@ -92,8 +90,10 @@ export const inputEngine = {
         // Reconstruct string
         const pre = s.raw.slice(0, s.match.index + 1); // "Hello @"
         const post = s.raw.slice(s.cursorPos); // " how are you"
-        
-        const newText = pre + replacement + (s.match.trigger !== ':' ? " " : "") + post;
+
+        // const newText = pre + replacement + (s.match.trigger !== ':' ? " " : "") + post;
+        // no space after completion
+        const newText = pre + replacement + post;
         
         // Update state
         store.set({ raw: newText, cursorPos: pre.length + replacement.length + 1, match: null, selectedIndex: 0 });

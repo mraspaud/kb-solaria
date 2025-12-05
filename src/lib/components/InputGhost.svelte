@@ -1,15 +1,23 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { inputEngine, ghostText, candidates } from '../stores/input';
+  import { inputEngine, ghostText, users } from '../stores/input';
+  import { chatStore } from '../stores/chat';
   import { sendMessage } from '../socketStore';
 
   let textarea: HTMLTextAreaElement;
   let backdrop: HTMLElement;
   
-  // Re-export specific handlers for App.svelte if needed, 
-  // but preferably this component handles its own keydown logic.
-  
   $: state = $inputEngine;
+
+  let validEntities = new Set<string>();
+  
+  $: {
+      validEntities.clear();
+      // Add Channels (prefix #)
+      $chatStore.availableChannels.forEach(c => validEntities.add('#' + c.name));
+      // Add Users (prefix @)
+      $users.forEach(u => validEntities.add('@' + u.name));
+  }
 
   function handleInput() {
       inputEngine.update(textarea.value, textarea.selectionEnd);
@@ -49,7 +57,7 @@
       }
       // 1. NAVIGATION (If Trigger Active)
       if (state.match) {
-          if (e.key === 'Tab' || (e.key === ' ' && $ghostText)) {
+          if (e.key === 'Tab' && $ghostText) {
               e.preventDefault();
               const resolved = inputEngine.resolve();
               if (resolved) {
@@ -84,16 +92,6 @@
 
         e.preventDefault();
         e.stopPropagation();
-        // 1. Priority: If Autocomplete is open, Enter confirms the selection
-        if (state.match) {
-            const resolved = inputEngine.resolve();
-            if (resolved) {
-                textarea.value = $inputEngine.raw;
-                await tick();
-                textarea.setSelectionRange($inputEngine.cursorPos, $inputEngine.cursorPos);
-                return;
-            }
-        }
 
         // 2. Send Message
         const text = textarea.value.trim();
@@ -114,6 +112,31 @@
   export function focus() {
           textarea?.focus();
   }
+
+  // A simple formatter for the backdrop
+  function renderBackdrop(text: string, match: any) {
+      // 1. Escape HTML first to prevent injection from raw text
+      let html = text
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+
+      html = html.replace(
+          /([@#])([a-zA-Z0-9_\-\.]+)/g, 
+          (match, trigger, name) => {
+              const key = trigger + name;
+              if (validEntities.has(key)) {
+                  const type = trigger === '@' ? 'at' : 'hash';
+                  return `<span class="highlight-${type}"><span class="marker">${trigger}</span>${name}</span>`;
+              } else {
+                  // Not valid? Render plain text (maybe just dim the marker slightly for style)
+                  return `<span class="marker">${trigger}</span>${name}`;
+              }
+          }
+      );
+      
+      return html;
+  }
 </script>
 
 <div class="ghost-input">
@@ -121,9 +144,9 @@
         {#if state.match}
             {@const pre = state.raw.slice(0, state.cursorPos)}
             {@const post = state.raw.slice(state.cursorPos)}
-            <span>{pre}</span><span class="ghost">{$ghostText}</span><span>{post}</span>
+            {@html renderBackdrop(pre)}<span class="ghost">{$ghostText}</span>{@html renderBackdrop(post)}
         {:else}
-            {state.raw}
+            {@html renderBackdrop(state.raw)}
         {/if}
         <br> 
     </div>
@@ -199,8 +222,40 @@
         pointer-events: none; /* Let clicks pass to textarea */
     }
 
+    /* Ghost Text (The suggestion) */
     .ghost {
         opacity: 0.5;
         color: var(--katana-gray);
+    }
+
+    /* MENTIONS (Resolved) */
+    /* Design Spec: "@ symbol is hidden, Name is Bold/Bright" */
+    :global(.ghost-mention) {
+        font-weight: bold;
+        color: var(--ronin-yellow);
+    }
+    
+
+    /* CHANNELS */
+    /* Design Spec: "# symbol visible but dimmed, Name Bold" */
+    :global(.ghost-channel) {
+        font-weight: bold;
+        color: var(--crystal-blue);
+    }
+    :global(.ghost-channel .marker) {
+        opacity: 0.5;
+        font-weight: normal;
+    }
+    :global(.highlight-at), :global(.highlight-hash) {
+        font-weight: bold;
+    }
+
+    :global(.highlight-at) { color: var(--ronin-yellow); }
+    :global(.highlight-hash) { color: var(--crystal-blue); }
+
+    :global(.marker) {
+        font-weight: normal;
+        opacity: 0.5; /* Visible but dimmed */
+        display: inline; /* Keep flow natural */
     }
 </style>
