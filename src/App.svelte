@@ -16,6 +16,8 @@
   import Markdown from './lib/components/Markdown.svelte';
   import ReactionPicker from './lib/components/ReactionPicker.svelte';
   import { sendReaction } from './lib/socketStore';
+  import Inspector from './lib/components/Inspector.svelte';
+  import { inspectorStore } from './lib/stores/inspector';
 
   // --- STATE ---
   let inputElement: HTMLTextAreaElement;
@@ -138,6 +140,10 @@ function stringToColor(str: string) {
         }
         if (e.key === 'd' && lastKey === 'd') {
             e.preventDefault(); deleteMessage(); lastKey = ''; return;
+        }
+        if (e.key === 'e' && lastKey === ' ') {
+            e.preventDefault(); 
+            inspectorStore.toggleLab();
         }
         if (e.key === 'r' && lastKey === ' ') {
              e.preventDefault();
@@ -412,6 +418,7 @@ function stringToColor(str: string) {
           </div>
       </div>
   </div>
+  <Inspector />
 </main>
 
 {#if showChannelSwitcher}
