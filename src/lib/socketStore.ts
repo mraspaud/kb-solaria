@@ -151,12 +151,13 @@ export function connect() {
                     author: {
                         id: msgData.author?.id || 'unknown',
                         name: msgData.author?.display_name || 'Unknown',
-                        color: msgData.author?.color // Backend sends hex color
+                        color: msgData.author?.color
                     },
                     content: msgData.body,
                     timestamp: new Date(msgData.timestamp),
                     replyCount: reply_count,
-                    reactions: msgData.reactions || {}
+                    reactions: msgData.reactions || {},
+                    attachments: msgData.attachments || [] 
                 });
             }
             

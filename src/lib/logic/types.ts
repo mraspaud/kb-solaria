@@ -19,6 +19,13 @@ export interface ChannelIdentity {
     parentMessage?: Message;
 }
 
+export interface Attachment {
+    id: string;
+    name: string;
+    path: string;
+    size?: number;
+}
+
 export interface Message {
     id: string;
     author: UserIdentity;
@@ -26,6 +33,7 @@ export interface Message {
     timestamp: Date;
     reactions: Record<string, string[]>; 
     replyCount?: number;
+    attachments?: Attachment[];
 }
 
 export interface UnreadState {

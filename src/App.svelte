@@ -345,6 +345,17 @@ function stringToColor(str: string) {
                 <!-- COL 2: TEXT -->
                 <span class="text">
                     <Markdown content={msg.content} />
+                    
+                    {#if msg.attachments && msg.attachments.length > 0}
+                        <div class="attachment-grid">
+                            {#each msg.attachments as file}
+                                <div class="file-chip" title={file.path}>
+                                    <span class="icon">📎</span>
+                                    <span class="filename">{file.name}</span>
+                                </div>
+                            {/each}
+                        </div>
+                    {/if}
                 </span>
 
                 <!-- COL 3: INDICATORS (Right Aligned) -->
@@ -496,4 +507,42 @@ function stringToColor(str: string) {
       color: var(--spring-green);
   }
   .count { font-size: 0.7em; opacity: 0.8; }
+  .attachment-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 4px;
+  }
+  
+  .file-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--sumi-ink-3);
+      border: 1px solid var(--sumi-ink-3);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      color: var(--fuji-white);
+      cursor: pointer;
+      transition: all 0.2s ease;
+  }
+
+  .file-chip:hover {
+      border-color: var(--crystal-blue);
+      background: var(--sumi-ink-2);
+  }
+
+  .file-chip .icon {
+      color: var(--ronin-yellow);
+      font-size: 0.9em;
+  }
+
+  .file-chip .filename {
+      /* Truncate long filenames nicely */
+      max-width: 200px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+  }
 </style>
