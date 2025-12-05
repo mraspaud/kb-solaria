@@ -1,7 +1,5 @@
 <!-- TODO:
-- make scrolling smooth
 - make u and d move half page/viewport, not number of lines
-- mark unread message as read when we move the cursor over them
 - make style transition between unread and read smooth/crossfade
 - make text scroll in detached+unfocussed mode when new messages arrive until cursor reaches the buffer zone
 - (fuzzy) search messages
@@ -16,6 +14,8 @@
   import { chatStore } from './lib/stores/chat';
   import ChannelSwitcher from './lib/components/ChannelSwitcher.svelte';
   import Markdown from './lib/components/Markdown.svelte';
+  import ReactionPicker from './lib/components/ReactionPicker.svelte';
+  import { sendReaction } from './lib/socketStore';
 
   // --- STATE ---
   let inputElement: HTMLTextAreaElement;
@@ -33,6 +33,7 @@
   let lastKeyTime = 0;
   let lastKey = '';
   const LEADER_TIMEOUT = 400;
+  let showReactionPicker = false;
 
   onMount(() => {
     connect();
@@ -137,6 +138,12 @@ function stringToColor(str: string) {
         }
         if (e.key === 'd' && lastKey === 'd') {
             e.preventDefault(); deleteMessage(); lastKey = ''; return;
+        }
+        if (e.key === 'r' && lastKey === ' ') {
+             e.preventDefault();
+             showReactionPicker = true;
+             lastKeyTime = 0;
+             return;
         }
     }
     
@@ -341,13 +348,27 @@ function stringToColor(str: string) {
                 </span>
 
                 <!-- COL 3: INDICATORS (Right Aligned) -->
-                {#if msg.replyCount}
-                    <div class="indicators">
+                <div class="indicators">
+                    {#if msg.reactions}
+                        {#each Object.entries(msg.reactions) as [emoji, users]}
+                             {@const iReacted = $chatStore.currentUser && users.includes($chatStore.currentUser.id)}
+                             
+                             <button 
+                                class="reaction-tag" 
+                                class:active={iReacted}
+                                on:click|stopPropagation={() => sendReaction(msg.id, emoji, iReacted ? 'remove' : 'add')}
+                             >
+                                {emoji} <span class="count">{users.length}</span>
+                             </button>
+                        {/each}
+                    {/if}
+
+                    {#if msg.replyCount}
                         <span class="reply-tag">
-                            {msg.replyCount} ⤴
+                            {msg.replyCount} ↪
                         </span>
-                    </div>
-                {/if}
+                    {/if}
+                </div>
             </div>
           </div>
         {/each}
@@ -384,6 +405,12 @@ function stringToColor(str: string) {
 
 {#if showChannelSwitcher}
     <ChannelSwitcher onClose={() => showChannelSwitcher = false} />
+{/if}
+{#if showReactionPicker}
+    <ReactionPicker 
+        messageId={$chatStore.messages[$chatStore.cursorIndex]?.id} 
+        onClose={() => showReactionPicker = false} 
+    />
 {/if}
 
 <style>
@@ -448,4 +475,25 @@ function stringToColor(str: string) {
   .prompt { color: var(--crystal-blue); font-weight: bold; margin-right: 8px; align-self: flex-start; margin-top: 1px; }
   .info { background: var(--sumi-ink-2); color: var(--fuji-white); }
   .logo-container { background: var(--sumi-ink-1); }
+  .reaction-tag {
+      background: var(--sumi-ink-3);
+      border: 1px solid transparent;
+      color: var(--fuji-white);
+      border-radius: 4px;
+      padding: 0 4px;
+      margin-right: 4px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      transition: all 0.1s;
+  }
+  .reaction-tag:hover { border-color: var(--ronin-yellow); }
+  .reaction-tag.active {
+      background: rgba(152, 187, 108, 0.2); /* Spring Green tint */
+      border-color: var(--spring-green);
+      color: var(--spring-green);
+  }
+  .count { font-size: 0.7em; opacity: 0.8; }
 </style>
