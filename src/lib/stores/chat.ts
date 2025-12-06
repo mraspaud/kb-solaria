@@ -9,7 +9,9 @@ interface ChatState {
     cursorIndex: number;
     isAttached: boolean;
     unread: Record<string, UnreadState>;
+    identities: Record<string, UserIdentity>;
     currentUser: UserIdentity | null;
+    users: Map<string, UserIdentity>;
 }
 
 function createChatStore() {
@@ -28,7 +30,9 @@ function createChatStore() {
         cursorIndex: -1,
         isAttached: true,
         unread: {},
-        currentUser: null
+        identities: {},
+        currentUser: null,
+        users: new Map(),
     });
 
     workspace.openChannel(systemChannel);
@@ -62,9 +66,6 @@ function createChatStore() {
             syncState();
         });
     }
-
-    // setupActiveBufferListener();
-    // syncState();
 
     return {
         subscribe: store.subscribe,
@@ -113,40 +114,6 @@ function createChatStore() {
                 syncState();
              }
         },
-        // handleReaction: (channelId: string, msgId: string, emoji: string, userId: string, action: 'add' | 'remove') => {
-        //     // 1. We need to find the message in the workspace buffers
-        //     // Since `Workspace` doesn't expose getBuffer by ID easily, we cheat slightly:
-        //     // We assume the user is likely looking at the channel, or we find it if open.
-        //
-        //     // TODO: Expose `workspace.windows.get(channelId)` properly.
-        //     // For now, let's assume we primarily update the ACTIVE buffer to reflect UI immediately.
-        //     const currentId = get(store).activeChannel.id;
-        //
-        //     if (channelId === currentId || !channelId) {
-        //         const buffer = workspace.getActiveBuffer();
-        //         const msg = buffer.messages.find(m => m.id === msgId);
-        //
-        //         if (msg) {
-        //             if (!msg.reactions) msg.reactions = {};
-        //             let users = msg.reactions[emoji] || [];
-        //
-        //             if (action === 'add') {
-        //                 if (!users.includes(userId)) users.push(userId);
-        //             } else {
-        //                 users = users.filter(u => u !== userId);
-        //             }
-        //
-        //             if (users.length > 0) {
-        //                 msg.reactions[emoji] = users;
-        //             } else {
-        //                 delete msg.reactions[emoji];
-        //             }
-        //
-        //             // Trigger Svelte update
-        //             syncState();
-        //         }
-        //     }
-        // },
 
         moveCursor: (delta: number) => {
             workspace.getActiveWindow().moveCursor(delta);
@@ -161,13 +128,19 @@ function createChatStore() {
         switchChannel: (channel: ChannelIdentity) => {
             if (!channel) return;
             
-            // CLEAR UNREADS ON SWITCH
             store.update(s => {
                 const newUnread = { ...s.unread };
                 delete newUnread[channel.id];
-                return { ...s, unread: newUnread };
-            });
+                
+                // Lookup the identity for this channel's service
+                const serviceIdentity = s.identities[channel.service.id] || null;
 
+                return { 
+                    ...s, 
+                    unread: newUnread,
+                    currentUser: serviceIdentity // <--- Context Switch
+                };
+            });
             workspace.openChannel(channel);
         },
 
@@ -235,8 +208,43 @@ function createChatStore() {
             });
         },
 
-        setIdentity: (user: { id: string; name: string }) => {
-            store.update(s => ({ ...s, currentUser: user }));
+        upsertUsers: (newUsers: UserIdentity[]) => {
+            store.update(s => {
+                const updated = new Map(s.users);
+                newUsers.forEach(u => updated.set(u.id, u));
+                
+                // Ensure Current User is in the list
+                if (s.currentUser && !updated.has(s.currentUser.id)) {
+                    updated.set(s.currentUser.id, s.currentUser);
+                }
+                
+                return { ...s, users: updated };
+            });
+        },
+
+        setIdentity: (serviceId: string, user: UserIdentity) => {
+            store.update(s => {
+                // Ensure the user object has the serviceId attached
+                const userWithService = { ...user, serviceId };
+
+                const newIdentities = { ...s.identities, [serviceId]: userWithService };
+                
+                let newCurrent = s.currentUser;
+                if (s.activeChannel.service.id === serviceId) {
+                    newCurrent = userWithService;
+                }
+                
+                // Add 'Me' to the phonebook with the correct Service ID tag
+                const newUsers = new Map(s.users);
+                newUsers.set(user.id, userWithService);
+                
+                return { 
+                    ...s, 
+                    identities: newIdentities,
+                    currentUser: newCurrent,
+                    users: newUsers
+                };
+            });
         },
         
         isMyMessage: (msg: Message) => {

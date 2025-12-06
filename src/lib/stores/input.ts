@@ -24,12 +24,19 @@ interface InputState {
 // 1. Common Emojis (Static for now, can be dynamic later)
 const EMOJIS = ["thumbsup", "thumbsdown", "fire", "rocket", "eyes", "check_mark", "x", "tada", "joy", "heart", "sob", "thinking"];
 
-// 2. Users (Derived from Message History for now)
 export const users = derived(chatStore, $s => {
-    const unique = new Map();
-    if($s.currentUser) unique.set($s.currentUser.id, $s.currentUser);
-    $s.messages.forEach(m => unique.set(m.author.id, m.author));
-    return Array.from(unique.values());
+    const activeServiceId = $s.activeChannel.service.id;
+    
+    return Array.from($s.users.values()).filter(u => {
+        // 1. Strict Match: User belongs to the active service
+        if (u.serviceId === activeServiceId) return true;
+        
+        // 2. Fallback: If user has NO service ID (legacy/internal), allow them everywhere
+        // (Optional: useful for system bots)
+        if (!u.serviceId) return true;
+        
+        return false;
+    });
 });
 
 
@@ -79,8 +86,37 @@ export const inputEngine = {
     subscribe: store.subscribe,
 
     update: (raw: string, cursorPos: number) => {
-        const match = detectTrigger(raw, cursorPos);
+        let match = detectTrigger(raw, cursorPos);
         
+       if (match) {
+            // If the query contains a space, we must be careful.
+            // "Martin R" -> Valid (prefix of Martin Raspaud)
+            // "Martin hello" -> Invalid (not a prefix of anyone)
+            if (match.query.includes(' ')) {
+                // We need to check if this query is a valid prefix for ANY candidate.
+                // We can access the raw data synchronously via get()
+                const allUsers = get(users);
+                const allChannels = get(chatStore).availableChannels;
+                
+                // Normalize for case-insensitive check
+                const q = match.query.toLowerCase();
+                let isValidPrefix = false;
+
+                if (match.trigger === '@') {
+                    // Check if 'q' is the start of any user name
+                    isValidPrefix = allUsers.some(u => u.name.toLowerCase().startsWith(q));
+                } else if (match.trigger === '#') {
+                    isValidPrefix = allChannels.some(c => c.name.toLowerCase().startsWith(q));
+                }
+
+                // If it's NOT a valid prefix for anyone, and we have passed a space,
+                // we assume the mention is finished and the user is typing the message.
+                if (!isValidPrefix) {
+                    match = null;
+                }
+            }
+        }
+
         store.update(s => {
             // If match changed, reset index
             const isNewMatch = JSON.stringify(match) !== JSON.stringify(s.match);
@@ -148,7 +184,9 @@ function detectTrigger(text: string, cursor: number): MatchResult | null {
     // Look backwards from cursor for the last @, #, or :
     // It must be preceded by start-of-string or whitespace
     const sub = text.slice(0, cursor);
-    const regex = /(^|\s)([@#:])([a-zA-Z0-9_\-]*)$/;
+    // const regex = /(^|\s)([@#:])([a-zA-Z0-9_\-]*)$/;
+    // const regex = /(^|\s)([@#:])([a-zA-Z0-9_\-\. ]*)$/;
+    const regex = /(^|\s)([@#:])((?:[a-zA-Z0-9_\-\.]+(?: [a-zA-Z0-9_\-\.]+)*)?)$/;
     const found = sub.match(regex);
 
     if (found) {

@@ -192,7 +192,7 @@ function renderBackdrop(text: string) {
     textarea {
         background: transparent;
         color: transparent; /* Text is hidden! We see the backdrop. */
-        caret-color: var(--ronin-yellow); /* Only caret is visible */
+        caret-color: var(--fuji-white); /* Only caret is visible */
         position: relative;
         z-index: 2;
         outline: none;

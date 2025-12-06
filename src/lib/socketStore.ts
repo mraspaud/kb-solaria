@@ -1,6 +1,6 @@
 import { writable, get } from 'svelte/store';
 import { chatStore } from './stores/chat';
-import type { ChannelIdentity, Message, ServiceIdentity } from './logic/types'; // Ensure ServiceIdentity is imported
+import type { ChannelIdentity, Message, ServiceIdentity, UserIdentity } from './logic/types'; // Ensure ServiceIdentity is imported
 
 export const status = writable<'connected' | 'connecting' | 'disconnected' | 'error'>('disconnected');
 
@@ -106,10 +106,14 @@ export function connect() {
             // ----------------------
             // 0. HANDSHAKE
             if (payload.event === 'self_info') {
-                chatStore.setIdentity(payload.user);
-                logToSystem(`Identity established: ${payload.user.name} (${payload.user.id})`);
+                const serviceId = payload.service?.id || 'unknown';
+                
+                // Store specifically for this service
+                chatStore.setIdentity(serviceId, payload.user);
+                
+                logToSystem(`Identity established for ${serviceId}: ${payload.user.name}`);
             }
-            // 1. HANDLE CHANNEL LIST
+            // HANDLE CHANNEL LIST
             if (payload.event === 'channel_list') {
                 const service = payload.service || { name: 'Unknown', id: 'unknown' };
                 
@@ -125,6 +129,19 @@ export function connect() {
                 chatStore.upsertChannels(channels);
                 
                 const currentState = get(chatStore);
+            }
+            else if (payload.event === 'user_list') {
+                const serviceId = payload.service?.id || 'unknown'; // Extract Service ID
+                const rawUsers = payload.users || [];
+                
+                // Inject serviceId into every user object
+                const users: UserIdentity[] = rawUsers.map((u: any) => ({
+                    ...u,
+                    serviceId: serviceId
+                }));
+                
+                chatStore.upsertUsers(users);
+                logToSystem(`Synced ${users.length} users for ${serviceId}.`);
             }
 
             // 2. INCOMING MESSAGE
