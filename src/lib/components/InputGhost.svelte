@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { inputEngine, ghostText, entityRegex, users } from '../stores/input';
+  import { sendTyping } from '../socketStore';  
   import { chatStore } from '../stores/chat';
   import { sendMessage } from '../socketStore';
 
@@ -19,10 +20,29 @@
       $users.forEach(u => validEntities.add('@' + u.name));
   }
 
+  let typingTimer: number | undefined;
+
   function handleInput() {
       inputEngine.update(textarea.value, textarea.selectionEnd);
       autoResize();
       syncScroll();
+      const chan = $chatStore.activeChannel;
+      if (chan.service.id !== 'internal') {
+          // If timer is NOT running, send "Typing" now (start of burst)
+          if (!typingTimer) {
+              const realId = chan.id.startsWith('thread_') ? chan.parentChannel?.id : chan.id;
+              if (realId) sendTyping(realId, chan.service.id);
+          }
+          
+          // Clear existing timer
+          clearTimeout(typingTimer);
+          
+          // Set new timer: We assume user stopped typing if no input for 2 seconds.
+          // We clear the timer variable so the next keystroke sends a new packet.
+          typingTimer = setTimeout(() => {
+              typingTimer = undefined;
+          }, 2000);
+      }
   }
 
   function handleSelect() {

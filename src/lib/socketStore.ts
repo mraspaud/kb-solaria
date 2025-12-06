@@ -144,7 +144,6 @@ export function connect() {
                 logToSystem(`Synced ${users.length} users for ${serviceId}.`);
             }
 
-            // 2. INCOMING MESSAGE
             else if (payload.event === 'message') {
                 const msgData = payload.message;
                 const serviceData = payload.service || { name: 'Unknown', id: 'unknown' };
@@ -183,7 +182,6 @@ export function connect() {
                 });
             }
             
-            // 3. UPDATES & DELETES
             else if (payload.event === 'message_update') {
                 chatStore.updateMessage(payload.message.id, payload.message.body);
             }
@@ -317,4 +315,30 @@ export function sendReaction(msgId: string, emoji: string, action: 'add' | 'remo
     
     // OPTIMISTIC UPDATE: Use me.id
     chatStore.handleReaction(meta.id, msgId, emoji, me.id, action);
+}
+
+export function sendMarkRead(channelId: string, messageId: string, serviceId: string) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    
+    // Safety: Don't mark system or thread headers (unless supported)
+    if (channelId === 'system' || serviceId === 'internal') return;
+
+    const payload = {
+        command: "mark_read",
+        service_id: serviceId,
+        channel_id: channelId,
+        message_id: messageId
+    };
+    socket.send(JSON.stringify(payload));
+}
+
+export function sendTyping(channelId: string, serviceId: string) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    
+    const payload = {
+        command: "typing",
+        service_id: serviceId,
+        channel_id: channelId
+    };
+    socket.send(JSON.stringify(payload));
 }

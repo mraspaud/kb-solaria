@@ -16,6 +16,7 @@
   import { inspectorStore } from './lib/stores/inspector';
   import { inputEngine } from './lib/stores/input';
   import { getUserColor } from './lib/logic/theme';
+  import { sendMarkRead } from './lib/socketStore';
 
   import ChannelSwitcher from './lib/components/ChannelSwitcher.svelte';
   import Markdown from './lib/components/Markdown.svelte';
@@ -257,8 +258,33 @@
       checkReadStatus();
   }
 
+  let markReadTimer: number | undefined;
+
   function checkReadStatus() {
-      if ($chatStore.isAttached && isWindowFocused) unreadMarkerIndex = -1;
+      if ($chatStore.isAttached && isWindowFocused) {
+          unreadMarkerIndex = -1;
+      }     
+      if ($chatStore.isAttached && isWindowFocused) {
+          clearTimeout(markReadTimer);
+          
+          markReadTimer = setTimeout(() => {
+              const channel = $chatStore.activeChannel;
+              const msgs = $chatStore.messages;
+              
+              if (msgs.length > 0) {
+                  const lastMsg = msgs[msgs.length - 1];
+                  
+                  // Only send if it's a real service
+                  if (channel.service.id !== 'internal') {
+                      const realId = channel.id.startsWith('thread_') ? channel.parentChannel?.id : channel.id;
+                      
+                      if (realId) {
+                          sendMarkRead(realId, lastMsg.id, channel.service.id);
+                      }
+                  }
+              }
+          }, 1000); // Wait 1 second before telling the backend
+      }
   }
 
   $: if ($chatStore.messages) {
