@@ -1,8 +1,9 @@
 <script lang="ts">
   import { Marked } from 'marked';
   import hljs from 'highlight.js/lib/core';
-  // Imports for validation
+
   import { chatStore } from '../stores/chat';
+  import { getUserColor } from '../logic/theme'; 
   import { users } from '../stores/input'; 
   // Register languages
   import python from 'highlight.js/lib/languages/python';
@@ -19,42 +20,96 @@
 
   export let content: string = "";
 
+  let nameToId = new Map<string, string>();
+  $: {
+      nameToId.clear();
+      $users.forEach(u => nameToId.set(u.name, u.id));
+  }
+
   let validUsers = new Set<string>();
 
   $: {
       validUsers.clear();
       $users.forEach(u => validUsers.add(u.name));
   }
-  
+
+  let sortedUserNames: string[] = [];
+  $: sortedUserNames = $users.map(u => u.name).sort((a, b) => b.length - a.length);
+
   const mentionExtension = {
     name: 'mention',
     level: 'inline',
-    start(src: string) { return src.match(/@[a-zA-Z0-9_\- ]/)?.index; },
+    // Quick check: does the string start with @?
+    start(src: string) { return src.indexOf('@'); },
+    
     tokenizer(src: string) {
-        // Match @Name (allowing spaces, but stopping at punctuation/newlines)
-        // Regex logic: @ followed by words, stopping before typical punctuation
-        const rule = /^@([a-zA-Z0-9_\-\.]+)/;
-        const match = rule.exec(src);
-        if (match) {
-            return {
-                type: 'mention',
-                raw: match[0],
-                text: match[1].trim() // The name without @
-            };
+        // We look for @
+        if (src[0] !== '@') return undefined;
+
+        // Try to match against known users (Longest First)
+        // This is manual matching to support spaces without Regex complexity
+        const content = src.slice(1); // Text after @
+        
+        for (const name of sortedUserNames) {
+            if (content.startsWith(name)) {
+                return {
+                    type: 'mention',
+                    raw: '@' + name, // Consume the full name with spaces
+                    text: name
+                };
+            }
         }
+        return undefined; // No valid user match found
     },
     renderer(token: any) {
         // Render as a semantic span we can style
         if (validUsers.has(token.text)) {
-            return `<span class="mention">${token.text}</span>`;
+            const id = nameToId.get(token.text) || 'unknown';
+            const color = getUserColor(id);
+            return `<span class="mention" style="background-color: ${color}; border-color: ${color}">${token.text.replace(/ /g, '&nbsp;')}</span>`;
+            // return `<span class="mention">${token.text}</span>`;
         } else {
             return `@${token.text}`; // Plain text return
         }
     }
   };
 
+let sortedChannelNames: string[] = [];
+  
+  $: {
+      // Sort longest first to match #general-dev before #general
+      sortedChannelNames = $chatStore.availableChannels
+          .map(c => c.name)
+          .sort((a, b) => b.length - a.length);
+  }
+
+  const channelExtension = {
+    name: 'channel',
+    level: 'inline',
+    start(src: string) { return src.indexOf('#'); },
+    tokenizer(src: string) {
+        if (src[0] !== '#') return undefined;
+        const content = src.slice(1);
+        
+        for (const name of sortedChannelNames) {
+            // Check start AND ensuring it's not part of a larger word if the name is a subset
+            // (Simple startsWith is usually enough if we sort by length)
+            if (content.startsWith(name)) {
+                return {
+                    type: 'channel',
+                    raw: '#' + name,
+                    text: name
+                };
+            }
+        }
+    },
+    renderer(token: any) {
+        const safeName = token.text.replace(/ /g, '&nbsp;');
+        return `<span class="channel">#${safeName}</span>`;
+    }
+  };
+
   const parser = new Marked({
-    // 1. LOGIC FIX: Turn 'Enter' into <br>
     breaks: true,
     gfm: true, 
     renderer: {
@@ -70,11 +125,11 @@
     }
   });
 
-  parser.use({ extensions: [mentionExtension] });
+  parser.use({ extensions: [mentionExtension, channelExtension] });
 
   let html = "";
 
-  $: if (content) {
+  $: if (content || sortedUserNames || sortedChannelNames) {
       try {
         const result = parser.parse(content);
         if (result instanceof Promise) {
@@ -101,7 +156,6 @@
     overflow-x: hidden;
   }
   
-  /* 2. CSS FIX: Allow paragraphs to stack, but keep them tight */
   :global(.markdown-body p) { 
       margin: 0; 
       /* display: inline;  <-- DELETED THIS. It destroys multiline structure. */
@@ -151,7 +205,7 @@
   :global(.hljs-built_in) { color: var(--wave-blue); }
   :global(.mention) {
       color: var(--sumi-ink-0);
-      background-color: var(--ronin-yellow); /* High contrast highlight */
+      /* background-color: var(--ronin-yellow); /* High contrast highlight */
       font-weight: bold;
       padding: 0 4px;
       border-radius: 3px;
@@ -168,4 +222,16 @@
       padding: 0 2px;
       border-radius: 3px;
   } */
+  /* Channel Links */
+  :global(.channel) {
+      color: var(--crystal-blue);
+      font-weight: bold;
+      cursor: pointer; /* Implies clickable, though we haven't wired click-to-join yet */
+      display: inline-block;
+  }
+  
+  :global(.channel:hover) {
+      text-decoration: underline;
+  }
+
 </style>

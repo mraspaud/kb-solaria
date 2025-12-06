@@ -1,6 +1,7 @@
 <script lang="ts">
     import { inputEngine, candidates } from '../../stores/input';
     import { chatStore } from '../../stores/chat';
+    import { getUserColor } from '../../logic/theme';
 
     $: state = $inputEngine;
     $: list = $candidates;
@@ -22,7 +23,7 @@
         {#each list as item, i}
             <div class="item" class:active={i === activeIdx}>
                 {#if state.match?.trigger === '@'}
-                    <span class="icon" style="color: {item.obj.color || 'inherit'}">●</span>
+                    <span class="icon" style="color: {getUserColor(item.obj.id)}">●</span>
                     <span class="name">{item.obj.name}</span>
                     {#if item.obj.id === $chatStore.currentUser?.id}
                          <span class="meta">(Me)</span>

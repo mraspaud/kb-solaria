@@ -15,6 +15,7 @@
   import { sendReaction } from './lib/socketStore';
   import { inspectorStore } from './lib/stores/inspector';
   import { inputEngine } from './lib/stores/input';
+  import { getUserColor } from './lib/logic/theme';
 
   import ChannelSwitcher from './lib/components/ChannelSwitcher.svelte';
   import Markdown from './lib/components/Markdown.svelte';
@@ -44,31 +45,6 @@
     connect();
   });
 
-  // --- LOGIC: COLOR HASHING ---
-function stringToColor(str: string) {
-    // FNV-1a Hash Algorithm
-    // This provides much better bit-mixing than the simple addition/shift
-    let hash = 2166136261; // 32-bit FNV offset basis
-    
-    for (let i = 0; i < str.length; i++) {
-        hash ^= str.charCodeAt(i);
-        // Math.imul is essential for correct 32-bit integer multiplication in JS/TS
-        hash = Math.imul(hash, 16777619); 
-    }
-
-    const colors = [
-        "#DCD7BA", "#C8C093", "#223249", "#938AA9", "#54546D", "#98BB6C", 
-        "#D27E99", "#FFA066", "#E6C384", "#b8b4d0", "#7E9CD8", "#957FB8", 
-        "#C0A36E", "#E46876", "#7AA89F", "#717C7C", "#727169", "#9CABCA", 
-        "#7FB4CA", "#FF5D62", "#76946A", "#C34043", "#DCA561", "#E82424", 
-        "#FF9E3B", "#658594", "#6A9589", "#16161D"
-    ];
-    
-    // We use >>> 0 to force the hash to be an unsigned integer before modulo
-    const index = (hash >>> 0) % colors.length;
-    
-    return colors[index];
-}
 
   // --- CONTROLLER ---
   function handleSend() {
@@ -350,7 +326,9 @@ function stringToColor(str: string) {
                 <!-- COL 1: META -->
                 <span class="meta">
                     <span class="time">{msg.timestamp.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-                    <span class="author" style="color: {stringToColor(msg.author)}">{msg.author.name}</span>
+                    <span class="author" style="color: {getUserColor(msg.author.id)}">
+                        {msg.author.name}
+                    </span>
                 </span>
                 
                 <!-- COL 2: TEXT -->

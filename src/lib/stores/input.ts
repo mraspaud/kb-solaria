@@ -19,6 +19,7 @@ interface InputState {
     selectedIndex: number;
 }
 
+
 // --- DATA SOURCES ---
 // 1. Common Emojis (Static for now, can be dynamic later)
 const EMOJIS = ["thumbsup", "thumbsdown", "fire", "rocket", "eyes", "check_mark", "x", "tada", "joy", "heart", "sob", "thinking"];
@@ -31,6 +32,44 @@ export const users = derived(chatStore, $s => {
     return Array.from(unique.values());
 });
 
+
+// 1. Helper to escape regex characters in names (e.g. "C++ Devs")
+function escapeRegex(string: string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// 2. Export the Dynamic Regex Store
+export const entityRegex = derived(
+    [users, chatStore], 
+    ([$users, $chat]) => {
+        // Collect all names
+        const userNames = $users.map(u => u.name);
+        const channelNames = $chat.availableChannels.map(c => c.name);
+        
+        // Sort by length DESCENDING to match "Martin Raspaud" before "Martin"
+        userNames.sort((a, b) => b.length - a.length);
+        channelNames.sort((a, b) => b.length - a.length);
+
+        // Build the Pattern:  @ (Name1|Name2|...) | # (Chan1|Chan2...)
+        // We use \b boundary check or end-of-string to prevent partial matches if needed,
+        // but given space handling, simple alternation is usually best.
+        
+        if (userNames.length === 0 && channelNames.length === 0) {
+            return null;
+        }
+
+        const userGroup = userNames.map(escapeRegex).join('|');
+        const chanGroup = channelNames.map(escapeRegex).join('|');
+        
+        let pattern = "";
+        if (userGroup) pattern += `(@)(${userGroup})`;
+        if (userGroup && chanGroup) pattern += "|";
+        if (chanGroup) pattern += `(#)(${chanGroup})`;
+
+        // Flag 'g' for global replacement
+        return new RegExp(pattern, 'g');
+    }
+);
 // --- STATE ---
 const initialState: InputState = { raw: "", cursorPos: 0, match: null, selectedIndex: 0 };
 const store = writable<InputState>(initialState);

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { inputEngine, ghostText, users } from '../stores/input';
+  import { inputEngine, ghostText, entityRegex, users } from '../stores/input';
   import { chatStore } from '../stores/chat';
   import { sendMessage } from '../socketStore';
 
@@ -113,27 +113,29 @@
           textarea?.focus();
   }
 
-  // A simple formatter for the backdrop
-  function renderBackdrop(text: string, match: any) {
-      // 1. Escape HTML first to prevent injection from raw text
+function renderBackdrop(text: string) {
       let html = text
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;");
 
-      html = html.replace(
-          /([@#])([a-zA-Z0-9_\-\.]+)/g, 
-          (match, trigger, name) => {
-              const key = trigger + name;
-              if (validEntities.has(key)) {
-                  const type = trigger === '@' ? 'at' : 'hash';
-                  return `<span class="highlight-${type}"><span class="marker">${trigger}</span>${name}</span>`;
-              } else {
-                  // Not valid? Render plain text (maybe just dim the marker slightly for style)
-                  return `<span class="marker">${trigger}</span>${name}`;
-              }
-          }
-      );
+      if (!$entityRegex) return html;
+
+      // Use the Dynamic Regex for precise replacement
+      html = html.replace($entityRegex, (match, trigger1, name1, trigger2, name2) => {
+          // Regex structure: (@)(Users) | (#)(Channels)
+          // If match is @User, trigger1=@, name1=User
+          // If match is #Chan, trigger2=#, name2=Chan
+          
+          const trigger = trigger1 || trigger2;
+          const name = name1 || name2;
+          const type = (trigger === '@') ? 'at' : 'hash';
+          
+          // NBSP TRICK: Replace spaces in the name with &nbsp;
+          const safeName = name.replace(/ /g, '&nbsp;');
+
+          return `<span class="highlight-${type}"><span class="marker">${trigger}</span>${safeName}</span>`;
+      });
       
       return html;
   }
