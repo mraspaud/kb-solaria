@@ -233,5 +233,15 @@ let sortedChannelNames: string[] = [];
   :global(.channel:hover) {
       text-decoration: underline;
   }
+  :global(.markdown-body a) {
+      color: #7FB4CA; /* Spring Blue (Distinct from Crystal Blue channels) */
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.2s ease, color 0.2s ease;
+  }
 
+  :global(.markdown-body a:hover) {
+      color: var(--ronin-yellow); /* Interaction feedback */
+      border-bottom-color: var(--ronin-yellow);
+  }
 </style>
