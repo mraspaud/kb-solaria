@@ -18,6 +18,7 @@ export interface ChannelIdentity {
     parentChannel?: ChannelIdentity;
     threadId?: string;
     parentMessage?: Message;
+    lastReadAt?: number;
 }
 
 export interface Attachment {

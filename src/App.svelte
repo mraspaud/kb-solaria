@@ -31,8 +31,6 @@
   let lastMessageCount = 0;
   let isWindowFocused = true;
   let unreadMarkerIndex = -1;
-  
-  // Edit Mode State
   let editingMessageId: string | null = null;
 
   // Modal & Key State
@@ -41,6 +39,14 @@
   let lastKey = '';
   const LEADER_TIMEOUT = 400;
   let showReactionPicker = false;
+  
+  // channel switching
+  let justSwitchedChannel = false;
+  let currentChannelId = "";
+  let positionTimer: number | undefined;
+  let markReadTimer: number | undefined;
+  let lastAckedMsgId: string | null = null;
+  let maxReadIndex = -1; // Tracks the "High Water Mark" for the current session
 
   onMount(() => {
     connect();
@@ -258,44 +264,163 @@
       checkReadStatus();
   }
 
-  let markReadTimer: number | undefined;
+  // function checkReadStatus() {
+  //     if ($chatStore.isAttached && isWindowFocused) {
+  //         unreadMarkerIndex = -1;
+  //     }     
+  //     if ($chatStore.isAttached && isWindowFocused) {
+  //         clearTimeout(markReadTimer);
+  //
+  //         markReadTimer = setTimeout(() => {
+  //             const channel = $chatStore.activeChannel;
+  //             const msgs = $chatStore.messages;
+  //
+  //             if (msgs.length > 0) {
+  //                 const lastMsg = msgs[msgs.length - 1];
+  //
+  //                 // Only send if it's a real service
+  //                 if (channel.service.id !== 'internal') {
+  //                     const realId = channel.id.startsWith('thread_') ? channel.parentChannel?.id : channel.id;
+  //
+  //                     if (realId) {
+  //                         sendMarkRead(realId, lastMsg.id, channel.service.id);
+  //                     }
+  //                 }
+  //             }
+  //         }, 1000); // Wait 1 second before telling the backend
+  //     }
+  // }
 
-  function checkReadStatus() {
-      if ($chatStore.isAttached && isWindowFocused) {
-          unreadMarkerIndex = -1;
-      }     
-      if ($chatStore.isAttached && isWindowFocused) {
-          clearTimeout(markReadTimer);
-          
-          markReadTimer = setTimeout(() => {
-              const channel = $chatStore.activeChannel;
-              const msgs = $chatStore.messages;
-              
-              if (msgs.length > 0) {
-                  const lastMsg = msgs[msgs.length - 1];
-                  
-                  // Only send if it's a real service
-                  if (channel.service.id !== 'internal') {
-                      const realId = channel.id.startsWith('thread_') ? channel.parentChannel?.id : channel.id;
-                      
-                      if (realId) {
-                          sendMarkRead(realId, lastMsg.id, channel.service.id);
-                      }
-                  }
-              }
-          }, 1000); // Wait 1 second before telling the backend
-      }
+  // 1. Channel Switch Listener
+  $: if ($chatStore.activeChannel.id !== currentChannelId) {
+      currentChannelId = $chatStore.activeChannel.id;
+      justSwitchedChannel = true;
+      unreadMarkerIndex = -1;
+
+      lastAckedMsgId = null;
+      maxReadIndex = -1;
+
+      clearTimeout(markReadTimer); 
+      clearTimeout(positionTimer);
   }
 
-  $: if ($chatStore.messages) {
-      const count = $chatStore.messages.length;
-      if (count > lastMessageCount) {
-          const isAway = !$chatStore.isAttached || !isWindowFocused;
-          if (isAway && unreadMarkerIndex === -1) unreadMarkerIndex = lastMessageCount - 1;
-          lastMessageCount = count;
-          if ($chatStore.isAttached) scrollToBottom();
-      }
+  $: if ($chatStore.cursorIndex !== -1 && !justSwitchedChannel) {
       checkReadStatus();
+  }
+
+  // 2. Message Stream Logic
+$: if ($chatStore.messages) {
+      const msgs = $chatStore.messages;
+      const channel = $chatStore.activeChannel;
+      
+      // A. LOADING PHASE (Debounced)
+      if (justSwitchedChannel) {
+          clearTimeout(positionTimer);
+          
+          positionTimer = setTimeout(() => {
+              const finalMsgs = $chatStore.messages;
+              if (finalMsgs.length === 0) return;
+
+              const threshold = (channel.lastReadAt || 0) * 1000;
+
+              if (channel.lastReadAt) {
+                  const firstUnreadIdx = finalMsgs.findIndex(m => m.timestamp.getTime() > threshold);
+                  
+                  if (firstUnreadIdx !== -1) {
+                      // 1. SET VISUAL MARKER
+                      // If index is 0 (all new), set to -2 so the template logic (index > -2) works.
+                      // If index is 5, set to 4.
+                      unreadMarkerIndex = firstUnreadIdx === 0 ? -2 : firstUnreadIdx - 1;
+
+                      // 2. JUMP
+                      // We jump to the last read message (or 0 if everything is new)
+                      const targetCursor = Math.max(0, firstUnreadIdx - 1);
+                      
+                      // 3. INITIALIZE PROGRESSIVE READ TRACKER (The Fix!)
+                      // We tell the system: "We have already read up to targetCursor."
+                      // This prevents checkReadStatus from firing immediately.
+                      maxReadIndex = targetCursor;
+
+                      console.log(`[Switch] Unread at ${firstUnreadIdx}. Jump to ${targetCursor}. MaxRead initialized to ${maxReadIndex}`);
+
+                      chatStore.jumpTo(targetCursor); 
+                      
+                      if (messageListContainer) {
+                          tick().then(() => {
+                              const el = document.getElementById(`msg-${targetCursor}`);
+                              el?.scrollIntoView({ block: 'center' });
+                          });
+                      }
+                  } else {
+                      // All read
+                      chatStore.jumpToBottom();
+                      maxReadIndex = finalMsgs.length - 1; // Mark everything as acknowledged
+                      checkReadStatus(); 
+                  }
+              } else {
+                  chatStore.jumpToBottom();
+                  checkReadStatus();
+              }
+              
+              justSwitchedChannel = false;
+              
+          }, 100);
+      }
+      
+      // B. LIVE PHASE (Standard Arrival)
+      else {
+           // ... (existing live logic) ...
+           checkReadStatus();
+      }
+      
+      lastMessageCount = msgs.length;
+  }
+
+  // 3. Mark Read Logic
+function checkReadStatus() {
+      // 1. Guards
+      if (!isWindowFocused || justSwitchedChannel) return;
+
+      const msgs = $chatStore.messages;
+      const idx = $chatStore.cursorIndex;
+      
+      // Safety check
+      if (idx < 0 || msgs.length === 0) return;
+
+      // 2. VISUALS: Manage the Red Line
+      // If we hit the bottom, clear the marker locally.
+      if ($chatStore.isAttached) {
+          unreadMarkerIndex = -1;
+      }
+
+      // 3. NETWORK: Mark Read (Strict)
+      // Only tell the backend we read the channel if we are actually 
+      // at the newest message (or attached to bottom).
+      const isAtBottom = $chatStore.isAttached || idx >= msgs.length - 1;
+
+      if (isAtBottom) {
+          clearTimeout(markReadTimer);
+          markReadTimer = setTimeout(() => {
+              // Re-check guards inside timer
+              if (justSwitchedChannel || !$chatStore.activeChannel) return;
+              
+              const channel = $chatStore.activeChannel;
+              const lastMsg = msgs[msgs.length - 1]; // Always mark the HEAD as read
+              
+              // Dedup: Don't send the same request twice
+              if (lastAckedMsgId === lastMsg.id) return;
+
+              if (channel.service.id !== 'internal') {
+                  const realId = channel.id.startsWith('thread_') ? channel.parentChannel?.id : channel.id;
+                  
+                  if (realId) {
+                      console.log(`[Mark Read] ${channel.name} completed.`);
+                      sendMarkRead(realId, lastMsg.id, channel.service.id);
+                      lastAckedMsgId = lastMsg.id;
+                  }
+              }
+          }, 1000); // 1s Debounce
+      }
   }
   
   // High Water Mark Logic

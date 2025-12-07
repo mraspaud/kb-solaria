@@ -31,14 +31,12 @@
     
     switch(e.key) {
       case 'ArrowDown':
-      case 'j':
         if (e.key === 'j' && e.ctrlKey) return; 
         e.preventDefault();
         selectedIndex = (selectedIndex + 1) % count;
         break;
 
       case 'ArrowUp':
-      case 'k':
         e.preventDefault();
         selectedIndex = (selectedIndex - 1 + count) % count;
         break;

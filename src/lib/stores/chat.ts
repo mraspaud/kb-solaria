@@ -120,6 +120,19 @@ function createChatStore() {
             syncState(); 
         },
 
+        jumpTo: (index: number) => {
+            const win = workspace.getActiveWindow();
+            const max = workspace.getActiveBuffer().messages.length - 1;
+            
+            // Set position clamped to bounds
+            win.cursorIndex = Math.max(0, Math.min(index, max));
+            
+            // DETACH unless we explicitly jumped to the very end
+            win.isAttached = (win.cursorIndex >= max);
+            
+            syncState();
+        },
+
         jumpToBottom: () => {
             workspace.getActiveWindow().jumpToBottom();
             syncState();
@@ -130,18 +143,22 @@ function createChatStore() {
             
             store.update(s => {
                 const newUnread = { ...s.unread };
-                delete newUnread[channel.id];
                 
                 // Lookup the identity for this channel's service
                 const serviceIdentity = s.identities[channel.service.id] || null;
 
                 return { 
                     ...s, 
-                    unread: newUnread,
                     currentUser: serviceIdentity // <--- Context Switch
                 };
             });
             workspace.openChannel(channel);
+            // --- NEW: FORCE DETACH ---
+            // We assume "detached" until the UI proves we are at the bottom.
+            // This prevents checkReadStatus() from firing prematurely.
+            workspace.getActiveWindow().isAttached = false;
+            
+            syncState();
         },
 
         openThread: (msg: Message) => {

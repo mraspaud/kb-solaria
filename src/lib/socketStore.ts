@@ -124,6 +124,7 @@ export function connect() {
                     id: c.id,
                     name: c.name || c.id,
                     service: { id: service.id, name: service.name },
+                    lastReadAt: c.last_read_at
                 }));
                 
                 chatStore.upsertChannels(channels);
