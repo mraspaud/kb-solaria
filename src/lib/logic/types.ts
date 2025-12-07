@@ -6,8 +6,9 @@ export interface ServiceIdentity {
 export interface UserIdentity {
     id: string;
     name: string;
-    color?: string; // Backend provides this for authors
+    color?: string;
     serviceId?: string;
+    channelPrefix?: string;
 }
 
 export interface ChannelIdentity {

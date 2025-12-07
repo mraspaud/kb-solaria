@@ -107,9 +107,13 @@ export function connect() {
             // 0. HANDSHAKE
             if (payload.event === 'self_info') {
                 const serviceId = payload.service?.id || 'unknown';
+                const identity: UserIdentity = {
+                    ...payload.user,
+                    channelPrefix: payload.channel_prefix || '#' // Default to #
+                };
                 
                 // Store specifically for this service
-                chatStore.setIdentity(serviceId, payload.user);
+                chatStore.setIdentity(serviceId, identity);
                 
                 logToSystem(`Identity established for ${serviceId}: ${payload.user.name}`);
             }

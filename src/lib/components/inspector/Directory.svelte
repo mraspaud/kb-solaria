@@ -12,7 +12,7 @@
     <div class="header">
         {#if state.match?.trigger === '@'}
             <span>Directory // Users</span>
-        {:else if state.match?.trigger === '#'}
+        {:else if state.match?.trigger === '#' || state.match?.trigger === '~'}
             <span>Directory // Channels</span>
         {:else if state.match?.trigger === ':'}
             <span>Directory // Emojis</span>
@@ -29,13 +29,14 @@
                          <span class="meta">(Me)</span>
                     {/if}
 
-                {:else if state.match?.trigger === '#'}
-                    <span class="icon">#</span>
+                {:else if state.match?.trigger === '#' || state.match?.trigger === '~'}
+                    <span class="icon">{state.match.trigger}</span>
                     <span class="name">{item.obj.name}</span>
                     <span class="meta">{item.obj.service.name}</span>
 
                 {:else if state.match?.trigger === ':'}
-                    <span class="emoji-icon">{item.obj}</span> <span class="name">:{item.obj}:</span>
+                    <span class="emoji-icon">{item.obj}</span>
+                    <span class="name">:{item.obj}:</span>
                 {/if}
             </div>
         {/each}
@@ -79,4 +80,5 @@
     .name { font-weight: bold; }
     .meta { font-size: 0.8rem; opacity: 0.7; margin-left: auto; }
     .empty { padding: 20px; text-align: center; color: var(--sumi-ink-3); font-style: italic; }
+    .emoji-icon { font-size: 1.2em; min-width: 1.5em; text-align: center; }
 </style>

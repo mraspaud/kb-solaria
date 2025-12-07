@@ -14,9 +14,17 @@
   
   $: {
       validEntities.clear();
-      // Add Channels (prefix #)
-      $chatStore.availableChannels.forEach(c => validEntities.add('#' + c.name));
-      // Add Users (prefix @)
+      const activeServiceId = $chatStore.activeChannel.service.id;
+      
+      // 1. Scoped Channels
+      $chatStore.availableChannels.forEach(c => {
+          if (c.service.id === activeServiceId) {
+              validEntities.add('#' + c.name);
+              validEntities.add('~' + c.name); // Support both in validator
+          }
+      });
+      
+      // 2. Scoped Users
       $users.forEach(u => validEntities.add('@' + u.name));
   }
 
