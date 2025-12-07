@@ -72,30 +72,46 @@ function createChatStore() {
         
         dispatchMessage: (channel: ChannelIdentity, msg: Message) => {
             workspace.dispatchMessage(channel, msg);
+            
             store.update(s => {
-                // Unread Logic
+                // 1. NEW: Update the Channel's Gravity (lastPostAt)
+                // We map over the array to ensure Svelte detects the change
+                const updatedChannels = s.availableChannels.map(c => {
+                    if (c.id === channel.id) {
+                        return { 
+                            ...c, 
+                            // Convert JS Date (ms) to Unix Timestamp (seconds) to match Backend format
+                            lastPostAt: msg.timestamp.getTime() / 1000 
+                        };
+                    }
+                    return c;
+                });
+
+                // 2. Unread Logic (Existing)
+                let newUnread = s.unread;
                 if (channel.id !== s.activeChannel.id) {
                     const current = s.unread[channel.id] || { count: 0, hasMention: false };
                     
                     let isMention = false;
                     if (s.currentUser) {
-                         // Check against name and ID
                          isMention = msg.content.includes(`@${s.currentUser.name}`) || 
                                      msg.content.includes(`@${s.currentUser.id}`);
                     }
 
-                    return {
-                        ...s,
-                        unread: {
-                            ...s.unread,
-                            [channel.id]: {
-                                count: current.count + 1,
-                                hasMention: current.hasMention || isMention
-                            }
+                    newUnread = {
+                        ...s.unread,
+                        [channel.id]: {
+                            count: current.count + 1,
+                            hasMention: current.hasMention || isMention
                         }
                     };
                 }
-                return s;
+
+                return {
+                    ...s,
+                    availableChannels: updatedChannels,
+                    unread: newUnread
+                };
             });
         },
         handleReaction: (channelId: string, msgId: string, emoji: string, userId: string, action: 'add' | 'remove') => {

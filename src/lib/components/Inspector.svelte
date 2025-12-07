@@ -2,6 +2,7 @@
   import { inspectorStore } from '../stores/inspector';
   import { chatStore } from '../stores/chat';
   import Directory from './inspector/Directory.svelte';
+  import StarMap from './inspector/StarMap.svelte';
   
   // Placeholder sub-components (we'll scaffold these next)
   // import Constellation from './inspector/Constellation.svelte';
@@ -20,9 +21,11 @@
 
     <div class="content">
         {#if $inspectorStore === 'IDLE'}
-            <div class="placeholder-art">
-                <div class="orbit-system">⚝</div>
-                <p class="status">System Nominal</p>
+            <div class="starmap-container">
+                <StarMap />
+                <div class="overlay-status">
+                     <span class="system-status">SYS.NOMINAL</span>
+                </div>
             </div>
         {:else if $inspectorStore === 'MEDIA'}
              <div class="preview-stage">
@@ -47,7 +50,6 @@
 
 <style>
     .inspector-pane {
-        /* Fixed 38% width for the Golden Ratio split */
         width: 38%; 
         flex-shrink: 0;
         background: var(--sumi-ink-0);
@@ -69,24 +71,47 @@
         font-weight: bold;
         text-transform: uppercase;
         letter-spacing: 1px;
+        z-index: 10; /* Ensure header sits above canvas if needed */
     }
 
     .content {
         flex: 1;
-        overflow-y: auto;
-        padding: 20px;
+        /* REMOVED padding: 20px; to let Canvas hit edges */
+        padding: 0; 
+        position: relative; /* Anchor for absolute children */
         display: flex;
         flex-direction: column;
-        align-items: center;
-        justify-content: center;
     }
 
-    /* Placeholder Art */
-    .orbit-system { font-size: 4rem; color: var(--katana-gray); opacity: 0.5; animation: spin 10s linear infinite; }
-    .status { color: var(--katana-gray); margin-top: 10px; font-size: 0.8rem; font-family: var(--font-main); }
-    
-    @keyframes spin { 100% { transform: rotate(360deg); } }
+    /* Specific container for map to force full height */
+    .starmap-container {
+        width: 100%;
+        height: 100%;
+        position: relative;
+    }
 
+    .overlay-status {
+        position: absolute;
+        bottom: 20px;
+        left: 0; 
+        width: 100%;
+        text-align: center;
+        pointer-events: none;
+    }
+    
+    .system-status {
+        font-size: 0.7rem;
+        color: var(--katana-gray);
+        letter-spacing: 2px;
+        opacity: 0.7;
+    }
+
+    /* Restore padding for other views */
+    .preview-stage, .context-thread, .scratchpad {
+        padding: 20px;
+        width: 100%;
+    }
+    
     /* Media Cards */
     .media-card {
         border: 1px solid var(--sumi-ink-3);
@@ -104,5 +129,6 @@
         border: none; color: var(--fuji-white);
         font-family: var(--font-main);
         padding: 10px; outline: none;
+        resize: none;
     }
 </style>
