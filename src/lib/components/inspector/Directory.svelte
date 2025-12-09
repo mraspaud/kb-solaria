@@ -49,22 +49,37 @@
 
 <style>
     .directory-container {
-        display: flex; flex-direction: column;
+        display: flex; 
+        flex-direction: column-reverse;
         height: 100%;
         font-family: var(--font-main);
+        justify-content: flex-start; /* Gravity: Push everything to the bottom */
+        padding-bottom: 4px; /* Lift up from the status bar */
     }
+    
+    .list {
+        display: flex;
+        flex-direction: column-reverse; /* FLIP: Index 0 (Best) goes to the bottom */
+        overflow-y: auto; /* Scroll if too tall */
+        max-height: 42vh; /* Safety cap */
+        padding: 5px 0;
+        flex-shrink: 0;
+        /* Smooth scrolling */
+        scrollbar-width: thin;
+        scrollbar-color: var(--sumi-ink-3) transparent;
+    }
+    
     .header {
         padding: 10px;
-        border-bottom: 1px solid var(--sumi-ink-3);
+        padding-bottom: 40px; /* Lift up from the status bar */
+        border-top: 1px solid var(--sumi-ink-3);
+        border-bottom: none; 
         color: var(--ronin-yellow);
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        letter-spacing: 1px;
+        order: -1; /* Keep header at the visual bottom? Or visual top? */
+        /* Let's try visual bottom (closest to input) */
+        flex-shrink: 0;
     }
-    .list {
-        flex: 1; overflow-y: auto;
-        padding: 5px 0;
-    }
+
     .item {
         padding: 6px 15px;
         display: flex; align-items: center; gap: 10px;

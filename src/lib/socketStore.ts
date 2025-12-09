@@ -168,7 +168,7 @@ export function connect() {
                         lastReadAt: c.last_read_at,
                         lastPostAt: c.last_post_at,
                         mass: c.mass !== undefined ? c.mass : 0,
-                        starred: c.starred // [cite: 192] Backend sends this
+                        starred: c.starred
                     };
                     
                     channels.push(identity);
@@ -238,7 +238,8 @@ export function connect() {
                     service: { id: serviceData.id, name: serviceData.name },
                     isThread: isThread,
                     starred: knownChannel?.starred, 
-                    mass: knownChannel?.mass
+                    mass: knownChannel?.mass,
+                    lastReadAt: knownChannel?.lastReadAt
                 };
                 
                 

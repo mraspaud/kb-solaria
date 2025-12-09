@@ -87,12 +87,25 @@
                 {:else if $inspectorStore === 'CONTEXT'}
                     <div class="panel">
                         <h3>Thread Context</h3>
+                        
+                        {#if $chatStore.activeChannel.isThread && $chatStore.activeChannel.parentMessage}
+                             <div class="thread-preview">
+                                 <span class="label">OP:</span>
+                                 <p>"{$chatStore.activeChannel.parentMessage.content.slice(0, 150)}..."</p>
+                             </div>
+                        {:else if msg.replyCount}
+                             <div class="thread-preview">
+                                 <span class="label">Topic:</span>
+                                 <p>"{msg.content.slice(0, 80)}..."</p>
+                             </div>
+                        {/if}
+
                         <div class="stats-row">
                              <div class="stat">
-                                 <span class="val">{msg?.replyCount || 0}</span>
+                                 <span class="val">{msg?.replyCount || $chatStore.messages.length || 0}</span>
                                  <span class="label">Replies</span>
                              </div>
-                             </div>
+                        </div>
 
                         {#if participants.length > 0}
                             <h4>Participants</h4>
@@ -103,8 +116,6 @@
                                     </div>
                                 {/each}
                             </div>
-                        {:else}
-                             <div class="empty-state">No preview available</div>
                         {/if}
                     </div>
 
@@ -211,5 +222,16 @@
     }
     .system-status { font-size: 0.7rem; color: var(--katana-gray); letter-spacing: 2px; opacity: 0.7; }
     .empty-state { font-style: italic; color: var(--katana-gray); }
-
+    .thread-preview {
+        background: rgba(255,255,255,0.05);
+        padding: 10px;
+        border-left: 2px solid var(--ronin-yellow);
+        margin-bottom: 15px;
+        font-style: italic;
+        color: var(--fuji-white);
+    }
+    .thread-preview .label {
+        font-weight: bold; color: var(--ronin-yellow); font-style: normal;
+        font-size: 0.75rem; display: block; margin-bottom: 4px;
+    }
 </style>

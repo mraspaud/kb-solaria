@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, createEventDispatcher } from 'svelte';
   import { inputEngine, ghostText, entityRegex, users } from '../stores/input';
   import { sendTyping } from '../socketStore';  
   import { chatStore } from '../stores/chat';
-  import { sendMessage } from '../socketStore';
 
   let textarea: HTMLTextAreaElement;
   let backdrop: HTMLElement;
-  
+  const dispatch = createEventDispatcher(); 
+
   $: state = $inputEngine;
 
   let validEntities = new Set<string>();
@@ -79,6 +79,7 @@
               inputEngine.reset();
           } else {
               // Priority 2: If menu is closed, exit Insert Mode (Hard Blur)
+              dispatch('cancel');
               textarea.blur();
           }
           return;
@@ -99,10 +100,10 @@
           }
 
           if (e.key === 'ArrowUp' || (e.key === 'k' && e.ctrlKey)) {
-              e.preventDefault(); inputEngine.moveSelection(-1); return;
+              e.preventDefault(); inputEngine.moveSelection(1); return;
           }
           if (e.key === 'ArrowDown' || (e.key === 'j' && e.ctrlKey)) {
-              e.preventDefault(); inputEngine.moveSelection(1); return;
+              e.preventDefault(); inputEngine.moveSelection(-1); return;
           }
           // ESC cancels autocomplete but keeps text
           if (e.key === 'Escape') {
@@ -125,7 +126,7 @@
         const text = textarea.value.trim();
         if (!text) return;
 
-        sendMessage(text);
+        dispatch('submit', text);
 
         // 3. Cleanup
         textarea.value = '';
@@ -139,6 +140,15 @@
   
   export function focus() {
           textarea?.focus();
+  }
+
+  export function setText(text: string) {
+      if (textarea) {
+          textarea.value = text;
+          // Sync the engine so the ghost text aligns
+          inputEngine.update(text, text.length);
+          autoResize();
+      }
   }
 
 function renderBackdrop(text: string) {

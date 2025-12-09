@@ -10,7 +10,7 @@
 -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { status, connect, sendMessage, sendUpdate, sendDelete } from './lib/socketStore';
+  import { status, connect, sendMessage, sendUpdate, sendDelete, fetchThread } from './lib/socketStore';
   import { chatStore } from './lib/stores/chat';
   import { sendReaction } from './lib/socketStore';
   import { inspectorStore } from './lib/stores/inspector';
@@ -43,6 +43,7 @@
   
   // channel switching
   let justSwitchedChannel = false;
+  let isTargetedJump = false;
   let currentChannelId = "";
   let positionTimer: number | undefined;
   let markReadTimer: number | undefined;
@@ -55,8 +56,7 @@
 
 
   // --- CONTROLLER ---
-  function handleSend() {
-    const text = inputElement.value.trim();
+  function handleSend(text: string) {
     if (!text) return;
 
     if (editingMessageId) {
@@ -67,39 +67,15 @@
         unreadMarkerIndex = -1;
     }
     
-    inputElement.value = ''; 
-    autoResize(); // Reset height
-    inputElement.blur();
+    // inputElement.value = ''; 
+    // autoResize(); // Reset height
+    // inputElement.blur();
   }
 
   function autoResize() {
       if (!inputElement) return;
       inputElement.style.height = 'auto';
       inputElement.style.height = inputElement.scrollHeight + 'px';
-  }
-
-  function handleInputKeydown(e: KeyboardEvent) {
-      if (e.key === 'Enter') {
-          if (!e.shiftKey) {
-              e.stopPropagation();
-              e.preventDefault();
-              handleSend();
-          }
-          // Shift+Enter = New Line (default)
-      }
-      
-      if (e.key === 'Escape') {
-          e.stopPropagation();
-          if (editingMessageId) {
-              editingMessageId = null;
-              inputElement.value = '';
-              autoResize();
-          }
-          inputElement.blur();
-      }
-      
-      // Recalculate height on next tick
-      setTimeout(autoResize, 0); 
   }
 
   function handleGlobalKeydown(e: KeyboardEvent) {
@@ -160,6 +136,17 @@
             lastKey = '';
             return;
         }
+        if (e.key === 'y' && lastKey === 'y') {
+            const msg = $chatStore.messages[$chatStore.cursorIndex];
+            e.preventDefault();
+            if (msg && msg.content) {
+                navigator.clipboard.writeText(msg.content);
+                // Optional: Flash visual feedback?
+                console.log("Copied to clipboard");
+            }
+            lastKey = '';
+            return;
+        }
     }
     
     if (e.key !== ' ') {
@@ -193,7 +180,9 @@
       case 'G':
         if (e.shiftKey) {
             chatStore.jumpToBottom();
-            scrollToBottom();
+            tick().then(() => {
+                scrollToBottom();
+            });
         }
         break;
       case 'i':
@@ -212,6 +201,7 @@
         // --- NEW: Triage Jump ---
         // If in aggregation view and message has a source, WARP.
         if ($chatStore.activeChannel.service.id === 'aggregation' && msg.sourceChannel) {
+             isTargetedJump = true;
              chatStore.switchChannel(msg.sourceChannel, msg.id);
              
              // Visual Polish: Scroll the specific message into view after the DOM updates
@@ -225,6 +215,20 @@
 
         // Standard Thread Opening
         chatStore.openThread(msg);
+        tick().then(() => {
+            const newChannel = $chatStore.activeChannel;
+            if (newChannel.isThread && newChannel.service.id !== 'internal') {
+                // Determine the correct parent ID (The backend needs the CHANNEL ID, not the Thread ID for the routing)
+                // The 'channel' arg in fetchThread is where the thread LIVES.
+                const parentId = newChannel.parentChannel?.id;
+                if (parentId) {
+                     // We construct a temporary identity for the fetch if needed, 
+                     // or pass the parentChannel object if fetchThread supports it.
+                     // Looking at socketStore.ts, fetchThread takes (channel, threadId, service).
+                     fetchThread(newChannel.parentChannel!, msg.id, newChannel.service);
+                }
+            }
+        });
         break;
       case 'Backspace':
         chatStore.goBack();
@@ -237,7 +241,7 @@
       // Simple auth check (expand later)
       if (msg && chatStore.isMyMessage(msg)) {
           editingMessageId = msg.id;
-          inputEngine.update(msg.content, msg.content.length); 
+          inputComponent.setText(msg.content);
           inputComponent.focus();
       }
   }
@@ -302,32 +306,37 @@
       checkReadStatus();
   }
 
-  // function checkReadStatus() {
-  //     if ($chatStore.isAttached && isWindowFocused) {
-  //         unreadMarkerIndex = -1;
-  //     }     
-  //     if ($chatStore.isAttached && isWindowFocused) {
-  //         clearTimeout(markReadTimer);
-  //
-  //         markReadTimer = setTimeout(() => {
-  //             const channel = $chatStore.activeChannel;
-  //             const msgs = $chatStore.messages;
-  //
-  //             if (msgs.length > 0) {
-  //                 const lastMsg = msgs[msgs.length - 1];
-  //
-  //                 // Only send if it's a real service
-  //                 if (channel.service.id !== 'internal') {
-  //                     const realId = channel.id.startsWith('thread_') ? channel.parentChannel?.id : channel.id;
-  //
-  //                     if (realId) {
-  //                         sendMarkRead(realId, lastMsg.id, channel.service.id);
-  //                     }
-  //                 }
-  //             }
-  //         }, 1000); // Wait 1 second before telling the backend
-  //     }
-  // }
+  async function handleIncomingMessage() {
+      await tick();
+      if (!messageListContainer) return;
+
+      // 1. If we are explicitly attached (at bottom), ALWAYS scroll
+      if ($chatStore.isAttached) {
+          scrollToBottom();
+          return;
+      }
+
+      // 2. Conveyor Logic
+      const cursorEl = document.getElementById(`msg-${$chatStore.cursorIndex}`);
+      if (!cursorEl) return;
+
+      const containerRect = messageListContainer.getBoundingClientRect();
+      const cursorRect = cursorEl.getBoundingClientRect();
+      
+      // Distance from top of viewport
+      const offset = cursorRect.top - containerRect.top;
+      
+      console.log(`[Conveyor] Offset: ${offset}px`); // Debug
+
+      // If the cursor is decently far down (>150px), pull the belt.
+      // We use a larger threshold to prevent jitter near the top.
+      if (offset > 150) {
+           // Instead of full scrollToBottom (which might jump too far), 
+           // we can just nudge it by the approximate height of a message, 
+           // OR just stick to scrollToBottom if we want to ride the wave.
+           scrollToBottom();
+      }
+  }
 
   // 1. Channel Switch Listener
   $: if ($chatStore.activeChannel.id !== currentChannelId) {
@@ -354,7 +363,6 @@ $: if ($chatStore.messages) {
       // A. LOADING PHASE (Debounced)
       if (justSwitchedChannel) {
           clearTimeout(positionTimer);
-          
           positionTimer = setTimeout(() => {
               const finalMsgs = $chatStore.messages;
               if (finalMsgs.length === 0) return;
@@ -366,103 +374,106 @@ $: if ($chatStore.messages) {
                   
                   if (firstUnreadIdx !== -1) {
                       // 1. SET VISUAL MARKER
-                      // If index is 0 (all new), set to -2 so the template logic (index > -2) works.
-                      // If index is 5, set to 4.
                       unreadMarkerIndex = firstUnreadIdx === 0 ? -2 : firstUnreadIdx - 1;
 
                       // 2. JUMP
-                      // We jump to the last read message (or 0 if everything is new)
-                      const targetCursor = Math.max(0, firstUnreadIdx - 1);
-                      
-                      // 3. INITIALIZE PROGRESSIVE READ TRACKER (The Fix!)
-                      // We tell the system: "We have already read up to targetCursor."
-                      // This prevents checkReadStatus from firing immediately.
-                      maxReadIndex = targetCursor;
-
-                      console.log(`[Switch] Unread at ${firstUnreadIdx}. Jump to ${targetCursor}. MaxRead initialized to ${maxReadIndex}`);
-
-                      chatStore.jumpTo(targetCursor); 
-                      
-                      if (messageListContainer) {
-                          tick().then(() => {
-                              const el = document.getElementById(`msg-${targetCursor}`);
-                              el?.scrollIntoView({ block: 'center' });
-                          });
+                      if (!isTargetedJump) {
+                          const targetCursor = Math.max(0, firstUnreadIdx - 1);
+                          maxReadIndex = targetCursor;
+                          chatStore.jumpTo(targetCursor);
+                          
+                          if (messageListContainer) {
+                              tick().then(() => {
+                                  const el = document.getElementById(`msg-${targetCursor}`);
+                                  el?.scrollIntoView({ block: 'center' });
+                              });
+                          }
+                      } else {
+                          // TARGETED JUMP (e.g. from Inbox)
+                          // We are already at the right spot. Just sync the read tracker.
+                          maxReadIndex = $chatStore.cursorIndex;
                       }
                   } else {
                       // All read
-                      chatStore.jumpToBottom();
-                      maxReadIndex = finalMsgs.length - 1; // Mark everything as acknowledged
-                      checkReadStatus(); 
+                      if (!isTargetedJump) chatStore.jumpToBottom();
+                      maxReadIndex = finalMsgs.length - 1;
                   }
               } else {
-                  chatStore.jumpToBottom();
-                  checkReadStatus();
+                  // No history
+                  if (!isTargetedJump) chatStore.jumpToBottom();
               }
               
+              // --- THE FIX ---
+              // 1. Release the "Loading" lock
               justSwitchedChannel = false;
               
-          }, 100);
+              checkReadStatus(isTargetedJump);
+              isTargetedJump = false; 
+          }, 50);
       }
       
       // B. LIVE PHASE (Standard Arrival)
       else {
-           if ($chatStore.isAttached) {
-               tick().then(() => {
-                   scrollToBottom();
-               });
-           }
+           handleIncomingMessage();
            checkReadStatus();
       }
       
       lastMessageCount = msgs.length;
   }
 
+  function handleCancel() {
+      if (editingMessageId) {
+          editingMessageId = null; // Exit Edit Mode state
+          if (inputComponent) inputComponent.setText(''); // Clear the buffer
+      }
+  }
+
   // 3. Mark Read Logic
-function checkReadStatus() {
+  function checkReadStatus(immediate = false) {
       // 1. Guards
       if (!isWindowFocused || justSwitchedChannel) return;
-
       const msgs = $chatStore.messages;
       const idx = $chatStore.cursorIndex;
       
-      // Safety check
       if (idx < 0 || msgs.length === 0) return;
 
-      // 2. VISUALS: Manage the Red Line
-      // If we hit the bottom, clear the marker locally.
-      if ($chatStore.isAttached) {
+      const isAtBottom = $chatStore.isAttached || idx >= msgs.length - 1;
+
+      // 2. VISUALS: FORCE CLEAR
+      // FIX: If we are literally at the last message (index match), 
+      // we must clear the marker, even if 'isAttached' is technically false.
+      if (isAtBottom) {
           unreadMarkerIndex = -1;
       }
 
-      // 3. NETWORK: Mark Read (Strict)
-      // Only tell the backend we read the channel if we are actually 
-      // at the newest message (or attached to bottom).
-      const isAtBottom = $chatStore.isAttached || idx >= msgs.length - 1;
-
-      if (isAtBottom) {
+      // 3. NETWORK: Mark Read
+      if (isAtBottom || immediate) {
           clearTimeout(markReadTimer);
-          markReadTimer = setTimeout(() => {
-              // Re-check guards inside timer
-              if (justSwitchedChannel || !$chatStore.activeChannel) return;
+          
+          const doMarkRead = () => {
+              if ((!immediate && justSwitchedChannel) || !$chatStore.activeChannel) return;
               
               const channel = $chatStore.activeChannel;
-              const lastMsg = msgs[msgs.length - 1]; // Always mark the HEAD as read
+              const targetMsg = msgs[idx];
               
-              // Dedup: Don't send the same request twice
-              if (lastAckedMsgId === lastMsg.id) return;
+              if (!targetMsg || lastAckedMsgId === targetMsg.id) return;
 
               if (channel.service.id !== 'internal') {
                   const realId = channel.id.startsWith('thread_') ? channel.parentChannel?.id : channel.id;
-                  
                   if (realId) {
-                      console.log(`[Mark Read] ${channel.name} completed.`);
-                      sendMarkRead(realId, lastMsg.id, channel.service.id);
-                      chatStore.markChannelAsRead(channel, lastMsg.id);
-                      lastAckedMsgId = lastMsg.id;
+                      console.log(`[Mark Read] ${channel.name} up to ${targetMsg.id}`);
+                      sendMarkRead(realId, targetMsg.id, channel.service.id);
+                      chatStore.markChannelAsRead(channel, targetMsg.id);
+                      lastAckedMsgId = targetMsg.id;
                   }
               }
-          }, 1000); // 1s Debounce
+          };
+
+          if (immediate) {
+              doMarkRead();
+          } else {
+              markReadTimer = setTimeout(doMarkRead, 1000); 
+          }
       }
   }
   
@@ -606,7 +617,11 @@ function checkReadStatus() {
 
               <span class="prompt">❯</span>
 
-              <InputGhost bind:this={inputComponent} />
+              <InputGhost 
+                  bind:this={inputComponent} 
+                  on:submit={(e) => handleSend(e.detail)}
+                  on:cancel={handleCancel}
+              />
               
           </div>
           <div class="section info">
@@ -666,7 +681,10 @@ function checkReadStatus() {
   }
   .dot.hot { background: var(--samurai-red); box-shadow: 0 0 4px var(--samurai-red); }
   .dot.warm { background: var(--ronin-yellow); }
-  .dot.cold { background: var(--sumi-ink-3); }
+  .dot.cold { 
+      background: var(--crystal-blue); /* Ensure it's blue */
+      opacity: 0.5; /* Boost from default 0.2 */
+  }
 
   .buffer-container {
           flex-grow: 1; 

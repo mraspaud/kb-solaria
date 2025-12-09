@@ -14,6 +14,7 @@ interface ChatState {
     currentUser: UserIdentity | null;
     users: Map<string, UserIdentity>;
     participatedThreads: Set<string>;
+    virtualCounts: { triage: number; inbox: number; };
 }
 
 function createChatStore() {
@@ -48,7 +49,8 @@ function createChatStore() {
         identities: {},
         currentUser: null,
         users: new Map(),
-        participatedThreads: new Set()
+        participatedThreads: new Set(),
+        virtualCounts: {triage: 0, inbox: 0}
     });
 
     workspace.openChannel(triageChannel);
@@ -67,7 +69,7 @@ function createChatStore() {
         store.update(s => ({
             ...s, 
             activeChannel: workspace.activeChannel,
-            messages: buf.messages,
+            messages: [...buf.messages],
             cursorIndex: win.cursorIndex,
             isAttached: win.isAttached,
         }));
@@ -85,6 +87,20 @@ function createChatStore() {
         });
     }
 
+    setupActiveBufferListener();
+
+    const updateVirtualCounts = (s: ChatState) => {
+        const triageBuf = workspace.getBuffer('triage');
+        const inboxBuf = workspace.getBuffer('inbox');
+        return {
+            ...s,
+            virtualCounts: {
+                triage: triageBuf ? triageBuf.messages.length : 0,
+                inbox: inboxBuf ? inboxBuf.messages.length : 0
+            }
+        };
+    };
+
     return {
         subscribe: store.subscribe,
         
@@ -97,12 +113,8 @@ function createChatStore() {
                 const myThreads = s.participatedThreads;
 
                 // If I am the author...
-                if (myIdentity && msg.author.id === myIdentity.id) {
-                    // ...and it's a thread...
-                    if (msg.threadId) {
-                        myThreads.add(msg.threadId);
-                        // console.log(`[Memory] Tracking thread ${msg.threadId}`);
-                    }
+                if (myIdentity && msg.author.id === myIdentity.id && msg.threadId) {
+                    myThreads.add(msg.threadId);
                 }
                 
                 // --- B. THE BRAIN (Classification) ---
@@ -120,13 +132,18 @@ function createChatStore() {
                     sourceChannel: channel
                 };
 
+                let routedToTriage = false;
+                let routedToInbox = false;
+
                 if (verdict === Bucket.EGO || verdict === Bucket.CONTEXT) {
                     // Route to #triage
                     workspace.dispatchMessage(triageChannel, clone);
+                    routedToTriage = true;
                     // Force notification/sound for Ego?
                 } else if (verdict === Bucket.SIGNAL) {
                     // Route to #inbox
                     workspace.dispatchMessage(inboxChannel, clone);
+                    routedToInbox = true;
                 }
 
                 // --- D. STORE UPDATES (Existing Logic) ---
@@ -154,12 +171,39 @@ function createChatStore() {
                     };
                 }
 
-                return {
+                const nextState = {
                     ...s,
-                    availableChannels: updatedChannels,
-                    unread: newUnread,
-                    participatedThreads: myThreads // Save updated memory
+                    availableChannels: updatedChannels, // derived from your existing logic
+                    unread: newUnread,                  // derived from your existing logic
+                    participatedThreads: myThreads      // derived from your existing logic
                 };
+
+                const currentId = s.activeChannel.id;
+                const affectedActive = 
+                    (channel.id === currentId) || 
+                    (routedToTriage && currentId === 'triage') ||
+                    (routedToInbox && currentId === 'inbox');
+
+                if (affectedActive) {
+                    // We need to return the new state WITH the new messages.
+                    // Since 'workspace' has the data, we pull it directly.
+                    const win = workspace.getActiveWindow();
+                    return {
+                        ...s,
+                        // ... existing updates (unread, channels) ...
+                        availableChannels: updatedChannels,
+                        unread: newUnread,
+                        participatedThreads: myThreads,
+                        // FORCE REFRESH MESSAGES
+                        messages: [...win.buffer.messages],
+                        isAttached: win.isAttached,
+                        cursorIndex: win.cursorIndex
+                    };
+                }
+
+                
+                // FINAL SYNC of counts
+                return updateVirtualCounts(nextState);
             });
         },
 
@@ -217,7 +261,6 @@ function createChatStore() {
             workspace.openChannel(channel);
             const win = workspace.getActiveWindow();
             
-            // --- NEW: Jump Logic ---
             if (targetMessageId) {
                 const buf = workspace.getActiveBuffer();
                 const idx = buf.messages.findIndex(m => m.id === targetMessageId);
@@ -225,7 +268,7 @@ function createChatStore() {
                 if (idx !== -1) {
                     // Found it! Jump to it and detach.
                     win.cursorIndex = idx;
-                    win.isAttached = false;
+                    win.isAttached = (idx >= buf.messages.length - 1);
                 } else {
                     // Fallback: If not found (rare, given hydration), go to bottom
                     win.isAttached = true; 
@@ -242,7 +285,12 @@ function createChatStore() {
 
         openThread: (msg: Message) => {
             const currentChan = workspace.activeChannel;
-            workspace.openThread(msg, currentChan);
+            
+            const contextChannel = (currentChan.service.id === 'aggregation' && msg.sourceChannel) 
+                ? msg.sourceChannel 
+                : currentChan;
+
+            workspace.openThread(msg, contextChannel);
             syncState();
         },
 
@@ -392,6 +440,8 @@ function createChatStore() {
                 if (triageBuf) triageBuf.messages = triageBuf.messages.filter(filterFn);
                 if (inboxBuf) inboxBuf.messages = inboxBuf.messages.filter(filterFn);
 
+                const nextState = { ...s, unread: newUnread };
+
                 // C. Force a UI Sync if we are currently looking at Triage/Inbox
                 // (This ensures the message disappears instantly from your eyes)
                 if (s.activeChannel.service.id === 'aggregation') {
@@ -406,7 +456,7 @@ function createChatStore() {
                     localStorage.setItem('solaria_read_state', JSON.stringify(blacklist));
                 } catch (e) { console.error("Storage error", e); }
 
-                return { ...s, unread: newUnread };
+                return updateVirtualCounts(nextState);
             });
 
             // 2. Network Side Effect (The existing logic)
