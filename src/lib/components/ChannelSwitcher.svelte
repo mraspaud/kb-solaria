@@ -11,7 +11,26 @@
 
   // 1. Prepare data for fuzzysort
   // We want to search against the ID and the Service Name
-  $: channels = $chatStore.availableChannels;
+  // WEIGHTED SORT: Mentions > Unreads > Starred > Recency
+  $: channels = [...$chatStore.availableChannels].sort((a, b) => {
+      const uA = $chatStore.unread[a.id] || { count: 0, hasMention: false };
+      const uB = $chatStore.unread[b.id] || { count: 0, hasMention: false };
+
+      // 1. Mentions (Pink Alert)
+      if (uA.hasMention !== uB.hasMention) return uA.hasMention ? -1 : 1;
+      
+      // 2. Unread Activity (Grey/White Noise)
+      if ((uA.count > 0) !== (uB.count > 0)) return uA.count > 0 ? -1 : 1;
+      
+      // 3. Starred (Signal)
+      if ((a.starred || false) !== (b.starred || false)) return a.starred ? -1 : 1;
+      
+      // 4. Recency (Active Conversations)
+      // Fallback to 0 if undefined
+      const timeA = a.lastPostAt || 0;
+      const timeB = b.lastPostAt || 0;
+      return timeB - timeA;
+  });
 
   // 2. Perform Search
   $: results = query 

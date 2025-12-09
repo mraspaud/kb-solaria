@@ -17,15 +17,16 @@ function createInspectorStore() {
             const msg = $chat.messages[$chat.cursorIndex];
             if (!msg) return 'IDLE';
 
-            // Priority 1: Media (Images/Code)
+            // Priority 1: Media
             if (msg.attachments && msg.attachments.length > 0) {
                 return 'MEDIA';
             }
 
             // Priority 2: Context (Thread/Reply)
-            // If it has replies, or is inside a thread, show context
-            if ((msg.replyCount && msg.replyCount > 0) || $chat.activeChannel.isThread) {
-                return 'CONTEXT';
+            if (!$chat.activeChannel.isThread) { 
+                if ((msg.replyCount && msg.replyCount > 0)) {
+                    return 'CONTEXT';
+                }
             }
 
             return 'IDLE';

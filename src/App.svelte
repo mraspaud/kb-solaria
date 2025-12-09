@@ -16,7 +16,8 @@
   import { inspectorStore } from './lib/stores/inspector';
   import { inputEngine } from './lib/stores/input';
   import { getUserColor } from './lib/logic/theme';
-  import { sendMarkRead } from './lib/socketStore';
+  import { sendMarkRead, sendOpenPath } from './lib/socketStore';
+  import { hudStore } from './lib/stores/hud';
 
   import ChannelSwitcher from './lib/components/ChannelSwitcher.svelte';
   import Markdown from './lib/components/Markdown.svelte';
@@ -139,6 +140,26 @@
              lastKeyTime = 0;
              return;
         }
+        if (e.key === 'z' && lastKey === 'z') {
+            e.preventDefault();
+            const el = document.getElementById(`msg-${$chatStore.cursorIndex}`);
+            el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            lastKey = '';
+            return;
+        }
+        if (e.key === 'x' && lastKey === 'g') {
+            const msg = $chatStore.messages[$chatStore.cursorIndex];
+            if (msg) {
+                 const urlRegex = /(https?:\/\/[^\s<>)]+)/g;
+                 const matches = msg.content.match(urlRegex);
+                 
+                 if (matches && matches.length > 0) {
+                     sendOpenPath(matches[0]); 
+                 }
+            }
+            lastKey = '';
+            return;
+        }
     }
     
     if (e.key !== ' ') {
@@ -186,7 +207,24 @@
         if ($chatStore.activeChannel.id.startsWith('thread_')) return;
         
         const msg = $chatStore.messages[$chatStore.cursorIndex];
-        if (msg) chatStore.openThread(msg);
+        if (!msg) return;
+
+        // --- NEW: Triage Jump ---
+        // If in aggregation view and message has a source, WARP.
+        if ($chatStore.activeChannel.service.id === 'aggregation' && msg.sourceChannel) {
+             chatStore.switchChannel(msg.sourceChannel, msg.id);
+             
+             // Visual Polish: Scroll the specific message into view after the DOM updates
+             tick().then(() => {
+                 const el = document.getElementById(`msg-${$chatStore.cursorIndex}`);
+                 el?.scrollIntoView({ block: 'center' });
+             });
+             return;
+        }
+        // ------------------------
+
+        // Standard Thread Opening
+        chatStore.openThread(msg);
         break;
       case 'Backspace':
         chatStore.goBack();
@@ -369,7 +407,11 @@ $: if ($chatStore.messages) {
       
       // B. LIVE PHASE (Standard Arrival)
       else {
-           // ... (existing live logic) ...
+           if ($chatStore.isAttached) {
+               tick().then(() => {
+                   scrollToBottom();
+               });
+           }
            checkReadStatus();
       }
       
@@ -416,6 +458,7 @@ function checkReadStatus() {
                   if (realId) {
                       console.log(`[Mark Read] ${channel.name} completed.`);
                       sendMarkRead(realId, lastMsg.id, channel.service.id);
+                      chatStore.markChannelAsRead(channel, lastMsg.id);
                       lastAckedMsgId = lastMsg.id;
                   }
               }
@@ -437,8 +480,11 @@ function checkReadStatus() {
 
 <main class="cockpit">
   <aside class="sidebar">
-      <!-- Placeholder Heatmap -->
-      <div class="dot hot"></div><div class="dot warm"></div><div class="dot cold"></div>
+      <div class="dot hot" class:active={$hudStore.ego > 0}></div>
+      
+      <div class="dot warm" class:active={$hudStore.signal > 0}></div>
+      
+      <div class="dot cold"></div>
   </aside>
 
   <div class="buffer-container">
@@ -466,23 +512,47 @@ function checkReadStatus() {
 
       <div class="message-list" bind:this={messageListContainer} class:is-thread={$chatStore.activeChannel.id.startsWith('thread_')}>
         {#each $chatStore.messages as msg, index}
-          {@const isUnread = unreadMarkerIndex !== -1 && index > unreadMarkerIndex}
-          <div 
+           {@const isUnread = unreadMarkerIndex !== -1 && index > unreadMarkerIndex}
+           
+           {@const prevMsg = $chatStore.messages[index - 1]}
+           {@const isNewDay = !prevMsg || prevMsg.timestamp.getDate() !== msg.timestamp.getDate()}
+           
+           {@const currentSource = msg.sourceChannel?.id || 'current'}
+           {@const prevSource = prevMsg?.sourceChannel?.id || 'current'}
+           {@const isNewContext = ($chatStore.activeChannel.service.id === 'aggregation') && (currentSource !== prevSource)}
+
+           {#if isNewDay || isNewContext}
+                <div class="context-separator">
+                    <div class="line"></div>
+                    <div class="label">
+                        {#if isNewContext && msg.sourceChannel}
+                            <span class="context-tag">
+                                [{msg.sourceChannel.service.name}] #{msg.sourceChannel.name}
+                            </span>
+                        {/if}
+                        
+                        {#if isNewDay}
+                            <span class="date-tag">
+                                {msg.timestamp.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+                            </span>
+                        {/if}
+                    </div>
+                </div>
+           {/if}
+           <div 
             id="msg-{index}"
             class="message-line" 
             class:active={index === $chatStore.cursorIndex} 
             class:unread={isUnread}
           >
             <div class="line-content">
-                <!-- COL 1: META -->
-                <span class="meta">
+               <span class="meta">
                     <span class="time">{msg.timestamp.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                     <span class="author" style="color: {getUserColor(msg.author.id)}">
-                        {msg.author.name}
+                      {msg.author.name}
                     </span>
                 </span>
                 
-                <!-- COL 2: TEXT -->
                 <span class="text">
                     <Markdown content={msg.content} />
                     
@@ -498,12 +568,10 @@ function checkReadStatus() {
                     {/if}
                 </span>
 
-                <!-- COL 3: INDICATORS (Right Aligned) -->
                 <div class="indicators">
                     {#if msg.reactions}
                         {#each Object.entries(msg.reactions) as [emoji, users]}
                              {@const iReacted = $chatStore.currentUser && users.includes($chatStore.currentUser.id)}
-                             
                              <button 
                                 class="reaction-tag" 
                                 class:active={iReacted}
@@ -574,7 +642,28 @@ function checkReadStatus() {
   .cockpit { display: flex; height: 100vh; width: 100vw; background: var(--sumi-ink-1); color: var(--fuji-white); font-family: var(--font-main); overflow: hidden; }
   
   .sidebar { width: 12px; background: var(--sumi-ink-0); border-right: 1px solid var(--sumi-ink-2); display: flex; flex-direction: column; align-items: center; padding-top: 10px; gap: 8px; }
-  .dot { width: 4px; height: 4px; border-radius: 50%; }
+  .dot { 
+      width: 4px; height: 4px; border-radius: 50%; 
+      transition: all 0.3s ease;
+      opacity: 0.2; /* Dim by default */
+  }
+  
+  .dot.active {
+      opacity: 1;
+      transform: scale(1.5);
+      box-shadow: 0 0 8px currentColor; /* Glow */
+  }
+  
+  /* Add a subtle pulse animation for active dots */
+  @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 currentColor; }
+      70% { box-shadow: 0 0 10px 4px transparent; }
+      100% { box-shadow: 0 0 0 0 transparent; }
+  }
+  
+  .dot.active {
+      animation: pulse 2s infinite;
+  }
   .dot.hot { background: var(--samurai-red); box-shadow: 0 0 4px var(--samurai-red); }
   .dot.warm { background: var(--ronin-yellow); }
   .dot.cold { background: var(--sumi-ink-3); }
@@ -686,5 +775,39 @@ function checkReadStatus() {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+  }
+  /* CONTEXT SEPARATOR */
+  .context-separator {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 20px 8px 0; /* Right padding for alignment */
+      opacity: 0.6;
+      margin-top: 8px;
+  }
+  
+  .context-separator .line {
+      flex-grow: 1;
+      height: 1px;
+      background: var(--sumi-ink-3);
+  }
+  
+  .context-separator .label {
+      font-size: 0.75rem;
+      color: var(--katana-gray);
+      display: flex;
+      gap: 12px;
+      white-space: nowrap;
+  }
+
+  .context-tag {
+      color: var(--ronin-yellow);
+      font-weight: bold;
+      letter-spacing: 0.5px;
+  }
+
+  .date-tag {
+      font-family: var(--font-main);
+      color: var(--fuji-white);
   }
 </style>

@@ -22,6 +22,7 @@ export interface ChannelIdentity {
     lastReadAt?: number;
     lastPostAt?: number;
     mass?: number;
+    starred?: boolean;
 }
 
 export interface Attachment {
@@ -39,9 +40,19 @@ export interface Message {
     reactions: Record<string, string[]>; 
     replyCount?: number;
     attachments?: Attachment[];
+    bucket?: Bucket; 
+    threadId?: string;
+    sourceChannel?: ChannelIdentity;
 }
 
 export interface UnreadState {
     count: number;
     hasMention: boolean;
+}
+
+export enum Bucket {
+    EGO = 'EGO',       // Direct DM, Mention
+    CONTEXT = 'CONTEXT', // Thread reply where I participated
+    SIGNAL = 'SIGNAL',   // Starred channel, passive monitor
+    NOISE = 'NOISE'      // The rest
 }

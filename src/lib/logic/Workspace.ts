@@ -7,6 +7,7 @@ type Listener = () => void;
 export class Workspace {
     private windows: Map<string, ChatWindow> = new Map();
     private meta: Map<string, ChannelIdentity> = new Map();
+    private readonly MAX_HISTORY = 50;
     
     // STRICT: activeChannel is always an Object
     activeChannel: ChannelIdentity;
@@ -153,4 +154,17 @@ export class Workspace {
     }
     
     private notify() { this.listeners.forEach(fn => fn()); }
+
+    pushToHistory(channel: ChannelIdentity) {
+        // Prevent duplicates at the top of the stack (optional, but clean)
+        const top = this.navigationStack[this.navigationStack.length - 1];
+        if (top && top.id === channel.id) return;
+
+        this.navigationStack.push(channel);
+        
+        // The Cap: Maintain strictly 50 items
+        if (this.navigationStack.length > this.MAX_HISTORY) {
+            this.navigationStack.shift(); // Remove the oldest
+        }
+    }
 }

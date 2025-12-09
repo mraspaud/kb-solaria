@@ -74,7 +74,42 @@ chatStore.subscribe(state => {
     sendChannelSwitch(current);
 });
 
+export function fetchHistory(channel: ChannelIdentity) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    
+    // We assume 'switch_channel' is stateless on the backend (just fetches data)
+    // We verify this in backend code: Slack/Mattermost backends just query history.
+    const payload = {
+        command: "switch_channel",
+        service_id: channel.service.id,
+        channel_id: channel.id, 
+        // We don't send 'after' here to force a fresh "latest" fetch
+    };
+    socket.send(JSON.stringify(payload));
+}
 
+export function sendOpenPath(path: string) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    
+    // We send this to the "internal" service (Solaria itself) or just let the main loop catch it
+    // The backend loop checks command type first, so service_id is less critical here, 
+    // but good for consistency.
+    const payload = {
+        command: "open_path",
+        service_id: "internal", 
+        path: path
+    };
+    socket.send(JSON.stringify(payload));
+}
+
+export function sendSaveToDownloads(path: string) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({
+        command: "save_to_downloads",
+        service_id: "internal",
+        path: path
+    }));
+}
 
 export function connect() {
     if (socket?.readyState === WebSocket.CONNECTING || socket?.readyState === WebSocket.OPEN) return;
@@ -120,23 +155,49 @@ export function connect() {
             // HANDLE CHANNEL LIST
             if (payload.event === 'channel_list') {
                 const service = payload.service || { name: 'Unknown', id: 'unknown' };
-                
-                // Ensure channels is an array
                 const rawChannels = Array.isArray(payload.channels) ? payload.channels : [];
                 
-                const channels: ChannelIdentity[] = rawChannels.map((c: any) => ({
-                    id: c.id,
-                    name: c.name || c.id,
-                    service: { id: service.id, name: service.name },
-                    lastReadAt: c.last_read_at,
-                    lastPostAt: c.last_post_at,
-                    mass: c.mass !== undefined ? c.mass : 0
+                const channels: ChannelIdentity[] = [];
+                const hydrationQueue: ChannelIdentity[] = [];
 
-                }));
-                
+                rawChannels.forEach((c: any) => {
+                    const identity: ChannelIdentity = {
+                        id: c.id,
+                        name: c.name || c.id,
+                        service: { id: service.id, name: service.name },
+                        lastReadAt: c.last_read_at,
+                        lastPostAt: c.last_post_at,
+                        mass: c.mass !== undefined ? c.mass : 0,
+                        starred: c.starred // [cite: 192] Backend sends this
+                    };
+                    
+                    channels.push(identity);
+
+                    // 1. INGEST UNREAD STATE
+                    if (c.unread || c.mentions > 0) {
+                        chatStore.updateUnreadState(c.id, c.unread ? 1 : 0, c.mentions > 0);
+                    }
+
+                    // 2. DETECT HYDRATION CANDIDATES (The Morning Paper)
+                    // Rule A: Ego (Mentions) -> Always fetch
+                    // Rule B: Signal (Starred & Unread) -> Always fetch
+                    const isEgo = c.mentions > 0;
+                    const isSignal = c.starred && c.unread; // Unread boolean from backend
+
+                    if (isEgo || isSignal) {
+                        hydrationQueue.push(identity);
+                    }
+                });
+
                 chatStore.upsertChannels(channels);
-                
-                const currentState = get(chatStore);
+
+                // 3. EXECUTE HYDRATION (Throttled)
+                hydrationQueue.forEach((chan, i) => {
+                    setTimeout(() => {
+                        console.log(`[Hydration] Fetching morning paper for #${chan.name} (Mentions: ${chan.mass}, Starred: ${chan.starred})`);
+                        fetchHistory(chan);
+                    }, i * 200);
+                });
             }
             else if (payload.event === 'user_list') {
                 const serviceId = payload.service?.id || 'unknown'; // Extract Service ID
@@ -159,22 +220,33 @@ export function connect() {
                 
                 let targetId = payload.channel_id || 'general';
                 let isThread = false;
-                
                 if (threadId) {
                     targetId = `thread_${threadId}`;
                     isThread = true;
                 }
 
+                // --- DATA RESOLUTION ---
+                const state = get(chatStore);
+                const lookupId = payload.channel_id || targetId;
+                const knownChannel = state.availableChannels.find(c => c.id === lookupId);
+                
+                const resolvedName = knownChannel ? knownChannel.name : (payload.channel_name || targetId);
+                
                 const channelIdentity: ChannelIdentity = {
                     id: targetId,
-                    name: payload.channel_name || payload.channel_id,
+                    name: resolvedName,
                     service: { id: serviceData.id, name: serviceData.name },
-                    isThread: isThread
+                    isThread: isThread,
+                    starred: knownChannel?.starred, 
+                    mass: knownChannel?.mass
                 };
+                
+                
                 let reply_count = 0;
                 if (msgData.replies !== undefined) {
                     reply_count = msgData.replies.count;
                 }
+
                 chatStore.dispatchMessage(channelIdentity, {
                     id: msgData.id,
                     author: {

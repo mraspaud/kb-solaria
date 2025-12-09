@@ -25,8 +25,14 @@ const EMOJIS = ["thumbsup", "thumbsdown", "fire", "rocket", "eyes", "check_mark"
 // 1. SCOPED USERS (Filtered by Service)
 export const users = derived(chatStore, $s => {
     const activeServiceId = $s.activeChannel.service.id;
-    return Array.from($s.users.values()).filter(u => {
-        // Strict Scoping: Only show users from the current service
+    const allUsers = Array.from($s.users.values());
+
+    if (activeServiceId === 'aggregation') {
+        return allUsers;
+    }
+
+    // Otherwise, strict scoping
+    return allUsers.filter(u => {
         return u.serviceId === activeServiceId || !u.serviceId; 
     });
 });

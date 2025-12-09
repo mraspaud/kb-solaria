@@ -176,9 +176,9 @@
       channels.forEach(c => {
           let lastActive = (c.lastReadAt || 0) * 1000;
           if (c.lastPostAt) lastActive = c.lastPostAt * 1000; 
-          if (c.id === activeId) lastActive = now;
-          if (unreadState[c.id]?.count > 0) lastActive = now;
-
+          if (lastActive > now + 86400000) {
+              lastActive = 0; 
+          }
           const physics = calculateOrbit(lastActive, c.id);
           
           const rawMass = c.mass || 0.0;
@@ -217,8 +217,7 @@
               }
               
               const u = unreadState[c.id];
-              if (c.id === activeId) s.activity = 0.5;
-              else if (u?.hasMention) s.activity = 1.0;
+              if (u?.hasMention) s.activity = 1.0;
               else if (u?.count > 0) s.activity = Math.min(0.8, 0.2 + (u.count * 0.05));
               else s.activity *= 0.95;
           }
