@@ -54,7 +54,8 @@
 
   // --- COMMAND DISPATCHER ---
   function handleCommand(cmd: Command) {
-      const isReadOnly = $chatStore.activeChannel.id === 'system';
+      const currentId = $chatStore.activeChannel.id;
+      const isReadOnly = currentId === 'system' || currentId === 'triage' || currentId === 'inbox';
       const msg = $chatStore.messages[$chatStore.cursorIndex];
 
       switch (cmd) {
