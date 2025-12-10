@@ -8,7 +8,7 @@ Inspired by Vim and the Unix philosophy, Solaria separates navigation (Normal Mo
 ## 1\. Installation
 
 **Prerequisites**
-You need `git`, `npm` (Node.js), and [`uv`](https://www.google.com/search?q=%5Bhttps://github.com/astral-sh/uv%5D\(https://github.com/astral-sh/uv\)).
+You need `git`, `npm` (Node.js), and [`uv`](https://github.com/astral-sh/uv).
 
 **Setup**
 Solaria is a "fat" repository containing the backend engine as a submodule.
@@ -94,9 +94,9 @@ uv run poe dev config.toml
 
 Triage & Inbox Solaria splits your incoming stream into two distinct buffers based on urgency, allowing you to prioritize "people talking to me" over "people talking near me."
 
-#triage (High Urgency, default view): This is your immediate action list. It collects Direct Mentions and Direct Messages (DMs) from all services. If someone specifically needs you, it appears here. Your goal is to keep this empty.
+**#triage** (High Urgency, default view): This is your immediate action list. It collects Direct Mentions and Direct Messages (DMs) from all services. If someone specifically needs you, it appears here. Your goal is to keep this empty.
 
-#inbox (Ambient Signal): This buffer collects messages from your Starred Channels and threads you participated in. It represents the "must-read" conversations you follow. It is less urgent than Triage but more important than general noise.
+**#inbox** (Ambient Signal): This buffer collects messages from your Starred Channels and threads you participated in. It represents the "must-read" conversations you follow. It is less urgent than Triage but more important than general noise.
 
 ### The Loop
 
