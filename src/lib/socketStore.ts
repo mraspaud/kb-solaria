@@ -190,6 +190,33 @@ service.onEvent((payload) => {
             chatStore.removeMessage(payload.message_id);
         }
 
+        // 6. THREAD SUBSCRIPTIONS
+        else if (payload.event === 'thread_subscription_list') {
+             const threadData = payload.thread_ids || []; 
+             
+             // 1. Register Participation (for Context Bucket)
+             const idsOnly = threadData.map((t: any) => t.id);
+             chatStore.hydrateParticipatedThreads(idsOnly);
+             
+             // 2. Fetch Unread Threads
+             let fetchCount = 0;
+             threadData.forEach((t: any) => {
+                 // Check the flag we just fixed in the backend
+                 if (t.unread && t.channel_id) {
+                     const dummyChannel = { 
+                         id: t.channel_id, 
+                         name: 'unknown', 
+                         service: { id: payload.service.id, name: '' } 
+                     };
+                     
+                     console.log(`[Hydration] Fetching unread thread ${t.id} in ${t.channel_id}`);
+                     fetchThread(dummyChannel, t.id, payload.service);
+                     fetchCount++;
+                 }
+             });
+        }
+
+
     } catch (e) {
         console.error("Socket Logic Error", e);
         logToSystem({ error: "Logic Failed", raw: payload });

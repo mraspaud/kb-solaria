@@ -428,6 +428,14 @@ function createChatStore() {
         },
         
 
+        hydrateParticipatedThreads: (threadIds: string[]) => {
+            store.update(s => {
+                const newThreads = new Set(s.participatedThreads);
+                threadIds.forEach(id => newThreads.add(id));
+                return { ...s, participatedThreads: newThreads };
+            });
+        },
+
         updateUnreadState: (channelId: string, count: number, hasMention: boolean) => {
             store.update(s => {
                 const current = s.unread[channelId] || { count: 0, hasMention: false };
