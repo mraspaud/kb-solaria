@@ -5,7 +5,7 @@ import { NetworkService } from './logic/NetworkService';
 import type { ChannelIdentity, UserIdentity, ServiceIdentity } from './logic/types';
 
 // 1. INITIALIZE SERVICE
-const NETWORK_URL = 'ws://127.0.0.1:1957/ws';
+const NETWORK_URL = 'ws://127.0.0.1:4722/ws';
 const service = new NetworkService(NETWORK_URL);
 
 // 2. EXPORT STATUS (Linked to Service)

@@ -1,0 +1,3 @@
+[submodule "kbunified"]
+	path = kbunified
+	url = git@github.com:mraspaud/kbunified.git
