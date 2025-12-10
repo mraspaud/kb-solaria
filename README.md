@@ -50,8 +50,6 @@ domain = "chat.ewc.com"
 user = "goodold.me"
 
 # 2. Slack
-# Note: Slack relies heavily on Firefox cookie extraction.
-# Ensure you are logged into this workspace in Firefox.
 [pytroll_slack]
 backend = "slack"
 name = "Pytroll"
