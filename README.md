@@ -1,4 +1,11 @@
-### 1\. Installation
+# Solaria
+
+Solaria is an opinionated, keyboard-centric command center designed for the "Power Communicator." It rejects the modern chat client paradigm of endless mouse-clicking and notification fatigue. Instead, it treats chat streams as data to be navigated, filtered, and acted upon with the precision of a text editor.
+
+Inspired by Vim and the Unix philosophy, Solaria separates navigation (Normal Mode) from composition (Insert Mode). It aggregates multiple fragmented services (Slack, Mattermost, Rocket.Chat) into a single, unified timeline, allowing you to manage attention on your own terms rather than reacting to every red dot that appears on your screen.
+
+
+## 1\. Installation
 
 **Prerequisites**
 You need `git`, `npm` (Node.js), and [`uv`](https://www.google.com/search?q=%5Bhttps://github.com/astral-sh/uv%5D\(https://github.com/astral-sh/uv\)).
@@ -21,7 +28,7 @@ npm install
 
 -----
 
-### 2\. Configuration (`config.toml`)
+## 2\. Configuration (`config.toml`)
 
 Solaria uses a straightforward TOML file to define your chat universe. Create a file named `config.toml`.
 
@@ -58,7 +65,7 @@ domain = "mattermost.work.com"
 
 -----
 
-### 3\. Quickstart Guide
+## 3\. Quickstart Guide
 
 **Make sure you log in to the different services in firefox before starting!**
 Solaria uses stored cookies and local browser storage to fetch tokens and credentials to log in.
@@ -83,9 +90,37 @@ uv run poe dev config.toml
 <!---->
 <!--   * **Appliance:** `http://localhost:4722` -->
 
+## 4\. Suggested Workflow
+
+### The Two-Tier Filter
+
+Triage & Inbox Solaria splits your incoming stream into two distinct buffers based on urgency, allowing you to prioritize "people talking to me" over "people talking near me."
+
+#triage (High Urgency, default view): This is your immediate action list. It collects Direct Mentions and Direct Messages (DMs) from all services. If someone specifically needs you, it appears here. Your goal is to keep this empty.
+
+#inbox (Ambient Signal): This buffer collects messages from your Starred Channels and threads you participated in. It represents the "must-read" conversations you follow. It is less urgent than Triage but more important than general noise.
+
+### The Loop
+
+Check #triage: Deal with mentions and DMs first. Press Enter to jump to context, reply, and the message automatically clears from Triage once you interact with it.
+
+Press <space><space> to switch to #inbox view: Review the ongoing discussions in your key channels.
+
+Explore: When your buffers are empty, use <space><space> (Quick Switch) to jump to specific channels or browse low-priority noise at your leisure. The channel switcher prioritises (ie moves up) channels with recent activity
+
+### The HUD (Heads Up Display)
+
+At the top left of the screen, the HUD provides a minimalist status report:
+
+Red dot, EGO: Indicates messages in #triage. Pulses if there are messages.
+
+Orange dot, SIGNAL: Indicates messages in #inbox. Pulses if there are messages.
+
+NOISE: All other unread traffic. Channels you follow but haven't starred will never trigger a notification or appear in your buffers. Never active for now.
+
 -----
 
-### 4\. Default Keybindings
+## 5\. Default Keybindings
 
 Solaria is modal, heavily inspired by Vim.
 
