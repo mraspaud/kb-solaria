@@ -66,13 +66,42 @@ function createChatStore() {
         
         if (!workspace.activeChannel) return; 
 
-        store.update(s => ({
-            ...s, 
-            activeChannel: workspace.activeChannel,
-            messages: [...buf.messages],
-            cursorIndex: win.cursorIndex,
-            isAttached: win.isAttached,
-        }));
+        store.update(s => {
+            // OPTIMIZATION: Referential Equality Check
+            // The buffer is mutable, but our store state is immutable.
+            // We only want to clone the buffer into a new array if the CONTENT has changed.
+            // Since ChatBuffer replaces objects on update (see ChatBuffer.ts:516), 
+            // strictly comparing the items is safe.
+            
+            let messagesToUse = s.messages;
+            const source = buf.messages;
+
+            // 1. Length Check (Fastest)
+            let hasChanged = source.length !== messagesToUse.length;
+
+            // 2. Content Check (O(N) - only if length matched)
+            if (!hasChanged) {
+                // We iterate backwards because changes (new messages) usually happen at the end.
+                for (let i = source.length - 1; i >= 0; i--) {
+                    if (source[i] !== messagesToUse[i]) {
+                        hasChanged = true;
+                        break;
+                    }
+                }
+            }
+
+            if (hasChanged) {
+                messagesToUse = [...source];
+            }
+
+            return {
+                ...s, 
+                activeChannel: workspace.activeChannel,
+                messages: messagesToUse, // Reuses the old array if identical
+                cursorIndex: win.cursorIndex,
+                isAttached: win.isAttached,
+            };
+        });
     };
 
     workspace.subscribe(() => {
@@ -148,13 +177,20 @@ function createChatStore() {
 
                 // --- D. STORE UPDATES (Existing Logic) ---
                 // Update Gravity
+                let channelExists = false;
                 const updatedChannels = s.availableChannels.map(c => {
                     if (c.id === channel.id) {
+                        channelExists = true;
                         return { ...c, lastPostAt: msg.timestamp.getTime() / 1000 };
                     }
                     return c;
                 });
-
+                if (!channelExists) {
+                    updatedChannels.push({
+                        ...channel,
+                        lastPostAt: msg.timestamp.getTime() / 1000
+                    });
+                }
                 // 2. Unread Logic (Existing)
                 let newUnread = s.unread;
                 if (channel.id !== s.activeChannel.id) {
@@ -411,67 +447,65 @@ function createChatStore() {
             });
         },
 
-        // NEW: Consolidated Read Logic
-        markChannelAsRead: (channel: ChannelIdentity, messageId: string) => {
-            // 1. Optimistic Store Update
+        markReadUpTo: (channel: ChannelIdentity, message: Message | null) => {
             store.update(s => {
-                // A. Clear Unread Count
-                const newUnread = { ...s.unread };
-                if (newUnread[channel.id]) {
-                    delete newUnread[channel.id];
+                // 1. UPDATE HIGH WATER MARK
+                // If we have a specific message, update the channel's lastReadAt
+                let updatedChannels = s.availableChannels;
+                
+                if (message) {
+                    const msgTime = message.timestamp.getTime() / 1000;
+                    updatedChannels = s.availableChannels.map(c => {
+                        if (c.id === channel.id) {
+                            // Only advance, never retreat
+                            const current = c.lastReadAt || 0;
+                            return { ...c, lastReadAt: Math.max(current, msgTime) };
+                        }
+                        return c;
+                    });
                 }
 
-                // B. PURGE TRIAGE & INBOX
-                // We access the raw buffers directly for the virtual channels
+                // 2. DO NOT DELETE UNREAD STATE
+                // We used to do: delete newUnread[channel.id]; 
+                // We removed that. The backend will send a 'channel_list' or update event
+                // with the new count (e.g. 5 -> 4) eventually. 
+                
+                // 3. PURGE TRIAGE & INBOX (Existing Logic)
                 const triageBuf = workspace.getBuffer('triage');
                 const inboxBuf = workspace.getBuffer('inbox');
 
+                // Filter out messages from this channel that are OLDER or EQUAL to the one we just read.
                 const filterFn = (m: Message) => {
-                    // Keep the message IF:
-                    // 1. It has no source (system msg)
-                    // 2. OR It comes from a DIFFERENT channel
-                    // 3. OR It comes from THIS channel but is NEWER than what we just read
-                    //    (Simple string comparison works for KSUIDs/TSIDs, 
-                    //     but strictly we might want timestamp comparison if IDs aren't chronological.
-                    //     For now, assume if we hit bottom, we read everything.)
-                    return !m.sourceChannel || m.sourceChannel.id !== channel.id;
+                    // Keep if:
+                    // 1. Different channel
+                    if (!m.sourceChannel || m.sourceChannel.id !== channel.id) return true;
+                    
+                    // 2. Same channel, but NEWER than the one we read
+                    // If we passed a message, filter. If null (mark all), filter everything.
+                    if (message) {
+                        return m.timestamp.getTime() > message.timestamp.getTime();
+                    }
+                    return false; // Mark all read -> remove all
                 };
 
                 if (triageBuf) triageBuf.messages = triageBuf.messages.filter(filterFn);
                 if (inboxBuf) inboxBuf.messages = inboxBuf.messages.filter(filterFn);
 
-                const nextState = { ...s, unread: newUnread };
+                const nextState = { 
+                    ...s, 
+                    availableChannels: updatedChannels 
+                };
 
-                // C. Force a UI Sync if we are currently looking at Triage/Inbox
-                // (This ensures the message disappears instantly from your eyes)
+                // 4. Force UI Sync if active
                 if (s.activeChannel.service.id === 'aggregation') {
-                    const win = workspace.getActiveWindow();
-                    // Re-sync the store's message list with the modified buffer
-                    return { ...s, unread: newUnread, messages: [...workspace.getActiveBuffer().messages] };
+                    return { 
+                        ...updateVirtualCounts(nextState), 
+                        messages: [...workspace.getActiveBuffer().messages] 
+                    };
                 }
-
-                try {
-                    const blacklist = JSON.parse(localStorage.getItem('solaria_read_state') || '{}');
-                    blacklist[channel.id] = messageId;
-                    localStorage.setItem('solaria_read_state', JSON.stringify(blacklist));
-                } catch (e) { console.error("Storage error", e); }
 
                 return updateVirtualCounts(nextState);
             });
-
-            // 2. Network Side Effect (The existing logic)
-            // We verify the service exists to avoid errors on virtual channels
-            if (channel.service.id !== 'internal' && channel.service.id !== 'aggregation') {
-                 // Import this at top of file or pass it in if circular dependency is an issue.
-                 // Ideally, keep `sendMarkRead` import in socketStore and call it here,
-                 // BUT `chatStore` shouldn't depend on `socketStore` (circular).
-                 // 
-                 // SOLUTION: We will trigger the socket call from the Component (App.svelte),
-                 // or move `markChannelAsRead` to a controller file.
-                 //
-                 // For now, let's keep the socket call in App.svelte for architecture safety,
-                 // and use this function purely for LOCAL state management.
-            }
         },
 
         isMyMessage: (msg: Message) => {

@@ -1,9 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ChatBuffer } from './ChatBuffer';
 import { ChatWindow } from './ChatWindow';
+import type { Message } from './types';
 
-const createMsg = (id: string) => ({ 
-    id, author: 'Me', content: 'txt', timestamp: new Date() 
+const createMsg = (id: string): Message => ({ 
+    id, 
+    author: { id: 'me', name: 'Me', color: '#fff' }, 
+    content: 'txt', 
+    timestamp: new Date(),
+    reactions: {} 
 });
 
 describe('Chat Interaction Logic', () => {
@@ -11,7 +16,6 @@ describe('Chat Interaction Logic', () => {
     let window: ChatWindow;
 
     beforeEach(() => {
-        // We inject the buffer into the window, implying a strict relationship
         buffer = new ChatBuffer();
         window = new ChatWindow(buffer);
     });
@@ -22,11 +26,9 @@ describe('Chat Interaction Logic', () => {
     });
 
     it('auto-advances cursor when attached (Chat Mode)', () => {
-        // 1. First message
         buffer.addMessage(createMsg('1'));
         expect(window.cursorIndex).toBe(0);
 
-        // 2. Second message
         buffer.addMessage(createMsg('2'));
         expect(window.cursorIndex).toBe(1);
     });
@@ -35,11 +37,10 @@ describe('Chat Interaction Logic', () => {
         buffer.addMessage(createMsg('1'));
         buffer.addMessage(createMsg('2'));
         
-        // User moves UP
         window.moveCursor(-1);
         
-        expect(window.cursorIndex).toBe(0); // Moved back
-        expect(window.isAttached).toBe(false); // Detached
+        expect(window.cursorIndex).toBe(0); 
+        expect(window.isAttached).toBe(false); 
     });
 
     it('stays put when new messages arrive if detached', () => {
@@ -47,12 +48,9 @@ describe('Chat Interaction Logic', () => {
         buffer.addMessage(createMsg('2'));
         window.moveCursor(-1); // At index 0
 
-        // New message arrives
         buffer.addMessage(createMsg('3'));
 
-        // Should NOT auto-scroll
         expect(window.cursorIndex).toBe(0);
-        // But logic should know we are behind
         expect(buffer.messages.length).toBe(3);
     });
 
@@ -70,9 +68,8 @@ describe('Chat Interaction Logic', () => {
         buffer.addMessage(createMsg('1'));
         buffer.addMessage(createMsg('2')); 
         
-        window.moveCursor(-1); // At 0 (Detached)
+        window.moveCursor(-1); 
         
-        // User moves DOWN to 1 (Bottom)
         window.moveCursor(1);
 
         expect(window.cursorIndex).toBe(1);

@@ -1,27 +1,32 @@
-import { writable, get } from 'svelte/store';
+// src/lib/socketStore.ts
+import { get } from 'svelte/store';
 import { chatStore } from './stores/chat';
-import type { ChannelIdentity, Message, ServiceIdentity, UserIdentity } from './logic/types'; // Ensure ServiceIdentity is imported
+import { NetworkService } from './logic/NetworkService';
+import type { ChannelIdentity, UserIdentity, ServiceIdentity } from './logic/types';
 
-export const status = writable<'connected' | 'connecting' | 'disconnected' | 'error'>('disconnected');
+// 1. INITIALIZE SERVICE
+const NETWORK_URL = 'ws://127.0.0.1:1957/ws';
+const service = new NetworkService(NETWORK_URL);
 
-let socket: WebSocket | null = null;
-let reconnectTimer: number | undefined;
-let lastSyncedChannelId: string | null = null; // Track this to avoid duplicate sends
+// 2. EXPORT STATUS (Linked to Service)
+export const status = service.status;
+
+// 3. INTERNAL STATE
+let lastSyncedChannelId: string | null = null;
 
 const loggerUser = { 
     id: 'system-logger', 
     name: 'Logger', 
-    color: '#727169' // katana-gray
+    color: '#727169' 
 };
 
-// Helper to log debug events
+// --- HELPERS ---
+
 function logToSystem(payload: any) {
     const systemIdentity: ChannelIdentity = { 
         id: 'system', name: 'system', service: { id: 'internal', name: 'Solaria' } 
     };
-    // Format the payload as a nice JSON code block
     const content = "```json\n" + JSON.stringify(payload, null, 2) + "\n```";
-    
     chatStore.dispatchMessage(systemIdentity, {
         id: crypto.randomUUID(),
         author: loggerUser,
@@ -30,10 +35,178 @@ function logToSystem(payload: any) {
     });
 }
 
-export function sendChannelSwitch(channel: ChannelIdentity) {
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    if (channel.service.id === 'internal') return;
+// --- EVENT HANDLING (Business Logic) ---
 
+// A. Lifecycle & Reconnection Logic
+status.subscribe(s => {
+    if (s === 'connected') {
+        logToSystem("connected");
+        // If we reconnect, the server lost our state. Force an update.
+        const current = get(chatStore).activeChannel;
+        if (current && current.id !== 'system') {
+            sendChannelSwitch(current);
+        }
+    } else if (s === 'connecting') {
+        logToSystem("connecting");
+    }
+});
+
+// B. Inbound Message Routing
+service.onEvent((payload) => {
+    // logToSystem(payload["event"]); // Optional: verbose logging
+
+    try {
+        // 1. HANDSHAKE / IDENTITY
+        if (payload.event === 'self_info') {
+            const serviceId = payload.service?.id || 'unknown';
+            const identity: UserIdentity = {
+                ...payload.user,
+                channelPrefix: payload.channel_prefix || '#' 
+            };
+            chatStore.setIdentity(serviceId, identity);
+            logToSystem(`Identity established for ${serviceId}: ${payload.user.name}`);
+        }
+
+        // 2. CHANNEL LIST & HYDRATION
+        else if (payload.event === 'channel_list') {
+            const service = payload.service || { name: 'Unknown', id: 'unknown' };
+            const rawChannels = Array.isArray(payload.channels) ? payload.channels : [];
+            
+            const channels: ChannelIdentity[] = [];
+            const hydrationQueue: ChannelIdentity[] = [];
+
+            rawChannels.forEach((c: any) => {
+                const identity: ChannelIdentity = {
+                    id: c.id,
+                    name: c.name || c.id,
+                    service: { id: service.id, name: service.name },
+                    lastReadAt: c.last_read_at,
+                    lastPostAt: c.last_post_at,
+                    mass: c.mass !== undefined ? c.mass : 0,
+                    starred: c.starred
+                };
+                
+                channels.push(identity);
+
+                // Ingest Unread State
+                if (c.unread || c.mentions > 0) {
+                    chatStore.updateUnreadState(c.id, c.unread ? 1 : 0, c.mentions > 0);
+                }
+
+                // Hydration Candidates (Morning Paper)
+                const isEgo = c.mentions > 0;
+                const isSignal = c.starred && c.unread; 
+                if (isEgo || isSignal) {
+                    hydrationQueue.push(identity);
+                }
+            });
+
+            chatStore.upsertChannels(channels);
+
+            // Execute Hydration (Throttled)
+            hydrationQueue.forEach((chan, i) => {
+                setTimeout(() => {
+                    console.log(`[Hydration] Fetching #${chan.name}`);
+                    fetchHistory(chan);
+                }, i * 200);
+            });
+        }
+
+        // 3. USER LIST
+        else if (payload.event === 'user_list') {
+            const serviceId = payload.service?.id || 'unknown';
+            const rawUsers = payload.users || [];
+            
+            const users: UserIdentity[] = rawUsers.map((u: any) => ({
+                ...u,
+                serviceId: serviceId
+            }));
+            chatStore.upsertUsers(users);
+        }
+
+        // 4. INCOMING MESSAGES
+        else if (payload.event === 'message') {
+            const msgData = payload.message;
+            const serviceData = payload.service || { name: 'Unknown', id: 'unknown' };
+            const threadId = payload.thread_id || msgData.thread_id;
+            
+            // 1. Capture the Parent ID before we overwrite targetId
+            const parentChannelId = payload.channel_id || 'general';
+            
+            let targetId = parentChannelId;
+            let isThread = false;
+
+            // 2. Resolve Parent Channel Identity
+            const state = get(chatStore);
+            const knownParent = state.availableChannels.find(c => c.id === parentChannelId);
+            
+            // Fallback object if parent isn't in store yet
+            const parentIdentity: ChannelIdentity = knownParent || {
+                id: parentChannelId,
+                name: payload.channel_name || parentChannelId,
+                service: { id: serviceData.id, name: serviceData.name }
+            };
+
+            // 3. Handle Thread Routing
+            if (threadId) {
+                targetId = `thread_${threadId}`;
+                isThread = true;
+            }
+
+            // 4. Construct the Final Identity
+            const channelIdentity: ChannelIdentity = {
+                id: targetId,
+                name: isThread ? 'Thread' : parentIdentity.name,
+                service: { id: serviceData.id, name: serviceData.name },
+                isThread: isThread,
+                starred: knownParent?.starred, 
+                mass: knownParent?.mass,
+                lastReadAt: knownParent?.lastReadAt,
+                
+                threadId: isThread ? threadId : undefined,
+                parentChannel: isThread ? parentIdentity : undefined
+            };
+
+            chatStore.dispatchMessage(channelIdentity, {
+                id: msgData.id,
+                author: {
+                    id: msgData.author?.id || 'unknown',
+                    name: msgData.author?.display_name || 'Unknown',
+                    color: msgData.author?.color
+                },
+                content: msgData.body,
+                timestamp: new Date(msgData.timestamp),
+                replyCount: msgData.replies?.count || 0,
+                reactions: msgData.reactions || {},
+                attachments: msgData.attachments || [] 
+            });
+        }
+        
+        // 5. UPDATES / DELETES
+        else if (payload.event === 'message_update') {
+            chatStore.updateMessage(payload.message.id, payload.message.body);
+        }
+        else if (payload.event === 'message_delete') {
+            chatStore.removeMessage(payload.message_id);
+        }
+
+    } catch (e) {
+        console.error("Socket Logic Error", e);
+        logToSystem({ error: "Logic Failed", raw: payload });
+    }
+});
+
+
+// --- EXPORTED ACTIONS (Controller) ---
+
+export function connect() {
+    service.connect();
+}
+
+export function sendChannelSwitch(channel: ChannelIdentity) {
+    if (channel.service.id === 'internal') return;
+    
+    // Determine 'After' ID for sync
     const lastId = chatStore.getLastMessageId(channel);
 
     let payload: any;
@@ -55,17 +228,17 @@ export function sendChannelSwitch(channel: ChannelIdentity) {
         };
     }
     
-    socket.send(JSON.stringify(payload));
+    service.send(payload);
     lastSyncedChannelId = channel.id;
 }
 
-// --- AUTOMATIC SYNC SUBSCRIPTION ---
-// This watches the chatStore. Whenever the user moves, we tell the backend.
+// Watch store for auto-switch
 chatStore.subscribe(state => {
     const current = state.activeChannel;
+    const connectionStatus = get(status); // Correctly get value from store
 
     // 1. Basic Validation
-    if (!current || !socket || socket.readyState !== WebSocket.OPEN) return;
+    if (!current || connectionStatus !== 'connected') return;
 
     // 2. Don't spam the server if we haven't actually moved
     if (current.id === lastSyncedChannelId) return;
@@ -74,248 +247,55 @@ chatStore.subscribe(state => {
     sendChannelSwitch(current);
 });
 
+
 export function fetchHistory(channel: ChannelIdentity) {
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    
-    // We assume 'switch_channel' is stateless on the backend (just fetches data)
-    // We verify this in backend code: Slack/Mattermost backends just query history.
-    const payload = {
+    service.send({
         command: "switch_channel",
         service_id: channel.service.id,
-        channel_id: channel.id, 
-        // We don't send 'after' here to force a fresh "latest" fetch
-    };
-    socket.send(JSON.stringify(payload));
+        channel_id: channel.id
+    });
 }
 
 export function sendOpenPath(path: string) {
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    
-    // We send this to the "internal" service (Solaria itself) or just let the main loop catch it
-    // The backend loop checks command type first, so service_id is less critical here, 
-    // but good for consistency.
-    const payload = {
+    service.send({
         command: "open_path",
         service_id: "internal", 
         path: path
-    };
-    socket.send(JSON.stringify(payload));
+    });
 }
 
 export function sendSaveToDownloads(path: string) {
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({
+    service.send({
         command: "save_to_downloads",
         service_id: "internal",
         path: path
-    }));
+    });
 }
 
-export function connect() {
-    if (socket?.readyState === WebSocket.CONNECTING || socket?.readyState === WebSocket.OPEN) return;
-
-    status.set('connecting');
-    logToSystem("connecting");
-    clearTimeout(reconnectTimer);
-
-    socket = new WebSocket('ws://127.0.0.1:8000/ws');
-
-    socket.onopen = () => {
-        status.set('connected');
-        logToSystem("connected");
-
-        // If we reconnect, the server lost our state. Force an update.
-        const current = get(chatStore).activeChannel;
-        if (current && current.id !== 'system') {
-            sendChannelSwitch(current);
-        }
-    };
-
-    socket.onmessage = (event) => {
-        try {
-            
-            logToSystem("received");
-            const payload = JSON.parse(event.data);
-            
-            logToSystem(payload["event"]);
-            // ----------------------
-            // 0. HANDSHAKE
-            if (payload.event === 'self_info') {
-                const serviceId = payload.service?.id || 'unknown';
-                const identity: UserIdentity = {
-                    ...payload.user,
-                    channelPrefix: payload.channel_prefix || '#' // Default to #
-                };
-                
-                // Store specifically for this service
-                chatStore.setIdentity(serviceId, identity);
-                
-                logToSystem(`Identity established for ${serviceId}: ${payload.user.name}`);
-            }
-            // HANDLE CHANNEL LIST
-            if (payload.event === 'channel_list') {
-                const service = payload.service || { name: 'Unknown', id: 'unknown' };
-                const rawChannels = Array.isArray(payload.channels) ? payload.channels : [];
-                
-                const channels: ChannelIdentity[] = [];
-                const hydrationQueue: ChannelIdentity[] = [];
-
-                rawChannels.forEach((c: any) => {
-                    const identity: ChannelIdentity = {
-                        id: c.id,
-                        name: c.name || c.id,
-                        service: { id: service.id, name: service.name },
-                        lastReadAt: c.last_read_at,
-                        lastPostAt: c.last_post_at,
-                        mass: c.mass !== undefined ? c.mass : 0,
-                        starred: c.starred
-                    };
-                    
-                    channels.push(identity);
-
-                    // 1. INGEST UNREAD STATE
-                    if (c.unread || c.mentions > 0) {
-                        chatStore.updateUnreadState(c.id, c.unread ? 1 : 0, c.mentions > 0);
-                    }
-
-                    // 2. DETECT HYDRATION CANDIDATES (The Morning Paper)
-                    // Rule A: Ego (Mentions) -> Always fetch
-                    // Rule B: Signal (Starred & Unread) -> Always fetch
-                    const isEgo = c.mentions > 0;
-                    const isSignal = c.starred && c.unread; // Unread boolean from backend
-
-                    if (isEgo || isSignal) {
-                        hydrationQueue.push(identity);
-                    }
-                });
-
-                chatStore.upsertChannels(channels);
-
-                // 3. EXECUTE HYDRATION (Throttled)
-                hydrationQueue.forEach((chan, i) => {
-                    setTimeout(() => {
-                        console.log(`[Hydration] Fetching morning paper for #${chan.name} (Mentions: ${chan.mass}, Starred: ${chan.starred})`);
-                        fetchHistory(chan);
-                    }, i * 200);
-                });
-            }
-            else if (payload.event === 'user_list') {
-                const serviceId = payload.service?.id || 'unknown'; // Extract Service ID
-                const rawUsers = payload.users || [];
-                
-                // Inject serviceId into every user object
-                const users: UserIdentity[] = rawUsers.map((u: any) => ({
-                    ...u,
-                    serviceId: serviceId
-                }));
-                
-                chatStore.upsertUsers(users);
-                logToSystem(`Synced ${users.length} users for ${serviceId}.`);
-            }
-
-            else if (payload.event === 'message') {
-                const msgData = payload.message;
-                const serviceData = payload.service || { name: 'Unknown', id: 'unknown' };
-                const threadId = payload.thread_id || msgData.thread_id;
-                
-                let targetId = payload.channel_id || 'general';
-                let isThread = false;
-                if (threadId) {
-                    targetId = `thread_${threadId}`;
-                    isThread = true;
-                }
-
-                // --- DATA RESOLUTION ---
-                const state = get(chatStore);
-                const lookupId = payload.channel_id || targetId;
-                const knownChannel = state.availableChannels.find(c => c.id === lookupId);
-                
-                const resolvedName = knownChannel ? knownChannel.name : (payload.channel_name || targetId);
-                
-                const channelIdentity: ChannelIdentity = {
-                    id: targetId,
-                    name: resolvedName,
-                    service: { id: serviceData.id, name: serviceData.name },
-                    isThread: isThread,
-                    starred: knownChannel?.starred, 
-                    mass: knownChannel?.mass,
-                    lastReadAt: knownChannel?.lastReadAt
-                };
-                
-                
-                let reply_count = 0;
-                if (msgData.replies !== undefined) {
-                    reply_count = msgData.replies.count;
-                }
-
-                chatStore.dispatchMessage(channelIdentity, {
-                    id: msgData.id,
-                    author: {
-                        id: msgData.author?.id || 'unknown',
-                        name: msgData.author?.display_name || 'Unknown',
-                        color: msgData.author?.color
-                    },
-                    content: msgData.body,
-                    timestamp: new Date(msgData.timestamp),
-                    replyCount: reply_count,
-                    reactions: msgData.reactions || {},
-                    attachments: msgData.attachments || [] 
-                });
-            }
-            
-            else if (payload.event === 'message_update') {
-                chatStore.updateMessage(payload.message.id, payload.message.body);
-            }
-            else if (payload.event === 'message_delete') {
-                chatStore.removeMessage(payload.message_id);
-            }
-
-        } catch (e) {
-            console.error("Parse error", e);
-            // Optional: Log parse errors to system too
-            logToSystem({ error: "Parse Failed", raw: event.data });
-        }
-    };
-
-    socket.onclose = () => {
-        status.set('disconnected');
-        socket = null;
-        reconnectTimer = setTimeout(connect, 3000);
-    };
-
-    socket.onerror = () => {
-        status.set('error');
-        if (socket) socket.close();
-    };
-}
-
-// --- OUTGOING COMMANDS (Unchanged) ---
 export function sendMessage(text: string) {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-        const state = get(chatStore);
-        const meta = state.activeChannel;
-        
-        let payload: any = {};
+    const state = get(chatStore);
+    const meta = state.activeChannel;
+    
+    let payload: any = {};
 
-        if (meta.id.startsWith('thread_')) {
-            payload = {
-                command: "post_reply",
-                service_id: meta?.service.id,
-                channel_id: meta.parentChannel?.id,
-                thread_id: meta?.threadId,
-                body: text
-            };
-        } else {
-            payload = {
-                command: "post_message",
-                service_id: meta?.service.id || 'unknown',
-                channel_id: meta?.id || 'general',
-                body: text
-            };
-        }
-
-        socket.send(JSON.stringify(payload));
+    if (meta.id.startsWith('thread_')) {
+        payload = {
+            command: "post_reply",
+            service_id: meta?.service.id,
+            channel_id: meta.parentChannel?.id,
+            thread_id: meta?.threadId,
+            body: text
+        };
+    } else {
+        payload = {
+            command: "post_message",
+            service_id: meta?.service.id || 'unknown',
+            channel_id: meta?.id || 'general',
+            body: text
+        };
     }
+
+    service.send(payload);
 }
 
 export function sendUpdate(id: string, newText: string) {
@@ -326,17 +306,15 @@ export function sendUpdate(id: string, newText: string) {
         ? meta.parentChannel?.id 
         : meta.id;
 
-    if (!realChannelId) return; // Safety check
+    if (!realChannelId) return;
 
-    const payload = {
+    service.send({
         command: "message_update",
-        service_id: meta.service.id, // Required for routing
-        channel_id: realChannelId,   // Required string
+        service_id: meta.service.id,
+        channel_id: realChannelId,
         message_id: id,
-        body: newText                // Flattened: backend expects cmd["body"]
-    };
-    
-    socket?.send(JSON.stringify(payload));
+        body: newText
+    });
     
     // Optimistic Update
     chatStore.updateMessage(id, newText);
@@ -352,29 +330,24 @@ export function sendDelete(id: string) {
 
     if (!realChannelId) return;
 
-    const payload = {
+    service.send({
         command: "message_delete",
-        service_id: meta.service.id, // Required for routing
-        channel_id: realChannelId,   // Required string
+        service_id: meta.service.id,
+        channel_id: realChannelId,
         message_id: id
-    };
-    
-    socket?.send(JSON.stringify(payload));
+    });
     
     // Optimistic Update
     chatStore.removeMessage(id);
 }
 
-export function fetchThread(channel: ChannelIdentity, threadId: string, service: ServiceIdentity) {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-        const payload = {
-            command: "fetch_thread",
-            service: service,
-            channel: channel,
-            thread_id: threadId
-        };
-        socket.send(JSON.stringify(payload));
-    }
+export function fetchThread(channel: ChannelIdentity, threadId: string, serviceId: ServiceIdentity) {
+    service.send({
+        command: "fetch_thread",
+        service: serviceId,
+        channel: channel,
+        thread_id: threadId
+    });
 }
 
 export function sendReaction(msgId: string, emoji: string, action: 'add' | 'remove' = 'add') {
@@ -384,42 +357,33 @@ export function sendReaction(msgId: string, emoji: string, action: 'add' | 'remo
 
     if (!me) return;
 
-    const payload = {
+    service.send({
         command: "react",
         service_id: meta.service.id,
         channel_id: meta.id.startsWith('thread_') ? meta.parentChannel?.id : meta.id,
         message_id: msgId,
         reaction: emoji,
         action: action
-    };
-    socket?.send(JSON.stringify(payload));
+    });
     
-    // OPTIMISTIC UPDATE: Use me.id
+    // OPTIMISTIC UPDATE
     chatStore.handleReaction(meta.id, msgId, emoji, me.id, action);
 }
 
 export function sendMarkRead(channelId: string, messageId: string, serviceId: string) {
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    
-    // Safety: Don't mark system or thread headers (unless supported)
     if (channelId === 'system' || serviceId === 'internal') return;
-
-    const payload = {
+    service.send({
         command: "mark_read",
         service_id: serviceId,
         channel_id: channelId,
         message_id: messageId
-    };
-    socket.send(JSON.stringify(payload));
+    });
 }
 
 export function sendTyping(channelId: string, serviceId: string) {
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    
-    const payload = {
+    service.send({
         command: "typing",
         service_id: serviceId,
         channel_id: channelId
-    };
-    socket.send(JSON.stringify(payload));
+    });
 }

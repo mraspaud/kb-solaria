@@ -7,44 +7,8 @@
   import { getUserColor } from '../logic/theme';
 
   $: msg = $chatStore.messages[$chatStore.cursorIndex];
-  
-  // Helper to list participants in a thread preview
-  $: participants = msg?.replies?.users || []; // Requires backend support (Mattermost/Slack usually send this)
-
-
-  function handleInspectorKeydown(e: KeyboardEvent) {
-      if ($inspectorStore === 'MEDIA') {
-          // gf: Open File (Go File)
-          if (e.key === 'f' && lastKey === 'g') {
-              e.preventDefault();
-              const files = msg?.attachments || [];
-              if (files.length > 0) sendOpenPath(files[0].path);
-              lastKey = '';
-              return;
-          }
-          
-          // yy: Download (Yank)
-          if (e.key === 'd' && lastKey === 'g') {
-              e.preventDefault();
-              const files = msg?.attachments || [];
-              if (files.length > 0) sendSaveToDownloads(files[0].path);
-              lastKey = '';
-              return;
-          }
-          
-          // Reset leader tracking
-          if (e.key === 'g' || e.key === 'y') {
-              lastKey = e.key;
-              return;
-          }
-          lastKey = '';
-      }
-  }
-  
-  let lastKey = '';
+  $: participants = msg?.replies?.users || [];
 </script>
-
-<svelte:window on:keydown={handleInspectorKeydown} />
 
 <aside class="inspector-pane">
     <div class="header">

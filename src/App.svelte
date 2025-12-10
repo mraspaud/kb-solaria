@@ -1,64 +1,197 @@
-<!-- TODO:
-- make u and d move half page/viewport, not number of lines
-- make style transition between unread and read smooth/crossfade
-- make text scroll in detached+unfocussed mode when new messages arrive until cursor reaches the buffer zone
-- (fuzzy) search messages
-- @-mention (fuzzy) autocompletion when in insert mode
-- mentions in received messages, should be display them in a special way?
-- when a mention comes for me, do I get notified somehow?
-- show/access channel header. How do we handle links in channel headers?
--->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { status, connect, sendMessage, sendUpdate, sendDelete, fetchThread } from './lib/socketStore';
+  
+  // Logic & Stores
+  import { 
+    status, connect, sendMessage, sendUpdate, sendDelete, 
+    fetchThread, sendOpenPath, sendSaveToDownloads, sendMarkRead 
+  } from './lib/socketStore';
   import { chatStore } from './lib/stores/chat';
-  import { sendReaction } from './lib/socketStore';
   import { inspectorStore } from './lib/stores/inspector';
-  import { inputEngine } from './lib/stores/input';
-  import { getUserColor } from './lib/logic/theme';
-  import { sendMarkRead, sendOpenPath } from './lib/socketStore';
-  import { hudStore } from './lib/stores/hud';
+  import { InputController } from './lib/logic/InputController';
+  import { DEFAULT_KEYMAP, type Command } from './lib/logic/keymap';
 
+  // Components
+  import Sidebar from './lib/components/Sidebar.svelte';
+  import ThreadBanner from './lib/components/ThreadBanner.svelte';
+  import MessageList from './lib/components/MessageList.svelte';
+  import StatusLine from './lib/components/StatusLine.svelte';
+  
+  // Modals
   import ChannelSwitcher from './lib/components/ChannelSwitcher.svelte';
-  import Markdown from './lib/components/Markdown.svelte';
   import ReactionPicker from './lib/components/ReactionPicker.svelte';
   import Inspector from './lib/components/Inspector.svelte';
-  import InputGhost from './lib/components/InputGhost.svelte';
+
+  // --- COMPONENT REFERENCES ---
+  let messageListComponent: MessageList;
+  let statusLineComponent: StatusLine;
 
   // --- STATE ---
-  let inputComponent: InputGhost;
-  let messageListContainer: HTMLElement;
   let isInsertMode = false;
-  let lastMessageCount = 0;
   let isWindowFocused = true;
   let unreadMarkerIndex = -1;
   let editingMessageId: string | null = null;
 
-  // Modal & Key State
+  // Modal State
   let showChannelSwitcher = false;
-  let lastKeyTime = 0;
-  let lastKey = '';
-  const LEADER_TIMEOUT = 400;
   let showReactionPicker = false;
   
-  // channel switching
+  // Channel Switching & Read State
   let justSwitchedChannel = false;
   let isTargetedJump = false;
   let currentChannelId = "";
   let positionTimer: number | undefined;
   let markReadTimer: number | undefined;
   let lastAckedMsgId: string | null = null;
-  let maxReadIndex = -1; // Tracks the "High Water Mark" for the current session
+  let maxReadIndex = -1;
+
+  // --- CONTROLLER SETUP ---
+  const controller = new InputController(DEFAULT_KEYMAP, handleCommand);
 
   onMount(() => {
     connect();
   });
 
+  // --- COMMAND DISPATCHER ---
+  function handleCommand(cmd: Command) {
+      const isReadOnly = $chatStore.activeChannel.id === 'system';
+      const msg = $chatStore.messages[$chatStore.cursorIndex];
 
-  // --- CONTROLLER ---
+      switch (cmd) {
+          // Navigation
+          case 'CURSOR_DOWN':
+          case 'SELECT_NEXT':
+              chatStore.moveCursor(1);
+              messageListComponent.scrollToCursor();
+              break;
+          case 'CURSOR_UP':
+          case 'SELECT_PREV':
+              chatStore.moveCursor(-1);
+              messageListComponent.scrollToCursor();
+              break;
+          case 'CURSOR_PAGE_DOWN':
+              chatStore.moveCursor(10);
+              messageListComponent.scrollToCursor();
+              break;
+          case 'CURSOR_PAGE_UP':
+              chatStore.moveCursor(-10);
+              messageListComponent.scrollToCursor();
+              break;
+          case 'JUMP_BOTTOM':
+              chatStore.jumpToBottom();
+              messageListComponent.scrollToBottom();
+              break;
+          case 'CENTER_VIEW':
+              // We could add a specific method to MessageList for this, 
+              // but scrollToCursor handles standard visibility well enough for now.
+              messageListComponent.scrollToCursor(); 
+              break;
+
+          // Modes
+          case 'ENTER_INSERT':
+              if (isReadOnly) return;
+              statusLineComponent.focus(); 
+              break;
+          case 'QUICK_SWITCH':
+              showChannelSwitcher = true;
+              break;
+          case 'TOGGLE_INSPECTOR':
+              inspectorStore.toggleLab();
+              break;
+          case 'TOGGLE_REACTION':
+              showReactionPicker = true;
+              break;
+
+          // Interaction
+          case 'ACTIVATE_SELECTION': 
+              handleActivateSelection(msg);
+              break;
+          case 'GO_BACK':
+              chatStore.goBack();
+              break;
+          case 'CANCEL':
+              handleCancel();
+              break;
+
+          // Message Ops
+          case 'START_EDIT':
+              if (isReadOnly) return;
+              startEdit(msg);
+              break;
+          case 'DELETE_MESSAGE':
+              if (isReadOnly) return;
+              deleteMessage(msg);
+              break;
+          case 'YANK_MESSAGE':
+              if (msg?.content) {
+                  navigator.clipboard.writeText(msg.content);
+                  console.log("Copied to clipboard");
+              }
+              break;
+          case 'OPEN_LINK':
+              if (msg) {
+                   const urlRegex = /(https?:\/\/[^\s<>)]+)/g;
+                   const matches = msg.content.match(urlRegex);
+                   if (matches) {
+                       matches.forEach(url => sendOpenPath(url));
+                   }
+              }
+              break;
+          
+          // Files
+          case 'OPEN_FILE':
+              if (msg?.attachments) {
+                  msg.attachments.forEach(file => sendOpenPath(file.path));
+              }
+              break;
+          case 'DOWNLOAD_FILE':
+              if (msg?.attachments) {
+                  msg.attachments.forEach(file => sendSaveToDownloads(file.path));
+              }
+              break;
+      }
+  }
+
+  // --- ACTIONS ---
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (showChannelSwitcher) return;
+    if (isInsertMode) return; 
+    controller.handleKey(e);
+  }
+
+  function handleActivateSelection(msg: any) {
+      if (!msg || $chatStore.activeChannel.id.startsWith('thread_')) return;
+
+      // Triage Jump
+      if ($chatStore.activeChannel.service.id === 'aggregation' && msg.sourceChannel) {
+          isTargetedJump = true;
+          const realId = msg.sourceChannel.id;
+          const serviceId = msg.sourceChannel.service.id;
+          
+          sendMarkRead(realId, msg.id, serviceId);
+          chatStore.markReadUpTo(msg.sourceChannel, msg);
+
+          chatStore.switchChannel(msg.sourceChannel, msg.id);
+          tick().then(() => messageListComponent.scrollToCursor());
+          return;
+      }
+      
+      // Thread Open
+      chatStore.openThread(msg);
+      tick().then(() => {
+          const newChannel = $chatStore.activeChannel;
+          if (newChannel.isThread && newChannel.service.id !== 'internal') {
+              const parentId = newChannel.parentChannel?.id;
+              if (parentId) {
+                   fetchThread(newChannel.parentChannel!, msg.id, newChannel.service);
+              }
+          }
+      });
+  }
+
   function handleSend(text: string) {
     if (!text) return;
-
     if (editingMessageId) {
         sendUpdate(editingMessageId, text);
         editingMessageId = null;
@@ -66,193 +199,31 @@
         sendMessage(text);
         unreadMarkerIndex = -1;
     }
-    
-    // inputElement.value = ''; 
-    // autoResize(); // Reset height
-    // inputElement.blur();
   }
 
-  function autoResize() {
-      if (!inputElement) return;
-      inputElement.style.height = 'auto';
-      inputElement.style.height = inputElement.scrollHeight + 'px';
+  function handleCancel() {
+      if (editingMessageId) {
+          editingMessageId = null;
+          statusLineComponent.setText('');
+      }
+      // Future: Close inspector or other UI states
   }
 
-  function handleGlobalKeydown(e: KeyboardEvent) {
-    if (showChannelSwitcher) return;
-    if (isInsertMode) return; // Input handles its own keys
-    const isReadOnly = $chatStore.activeChannel.id === 'system';
-    const now = Date.now();
-
-    // LEADER KEY (Space Space)
-    if (e.key === ' ') {
-        if (now - lastKeyTime < LEADER_TIMEOUT && lastKey === ' ') {
-            e.preventDefault();
-            showChannelSwitcher = true;
-            lastKeyTime = 0;
-            return;
-        }
-        lastKeyTime = now;
-        lastKey = ' ';
-    }
-
-    // OPERATORS (cc, dd)
-    if (now - lastKeyTime < LEADER_TIMEOUT) {
-        if (e.key === 'c' && lastKey === 'c') {
-            if (isReadOnly) return;
-            e.preventDefault(); startEdit(); lastKey = ''; return;
-        }
-        if (e.key === 'd' && lastKey === 'd') {
-            if (isReadOnly) return;
-            e.preventDefault(); deleteMessage(); lastKey = ''; return;
-        }
-        if (e.key === 'e' && lastKey === ' ') {
-            e.preventDefault(); 
-            inspectorStore.toggleLab();
-        }
-        if (e.key === 'r' && lastKey === ' ') {
-             e.preventDefault();
-             showReactionPicker = true;
-             lastKeyTime = 0;
-             return;
-        }
-        if (e.key === 'z' && lastKey === 'z') {
-            e.preventDefault();
-            const el = document.getElementById(`msg-${$chatStore.cursorIndex}`);
-            el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-            lastKey = '';
-            return;
-        }
-        if (e.key === 'x' && lastKey === 'g') {
-            const msg = $chatStore.messages[$chatStore.cursorIndex];
-            if (msg) {
-                 const urlRegex = /(https?:\/\/[^\s<>)]+)/g;
-                 const matches = msg.content.match(urlRegex);
-                 
-                 if (matches && matches.length > 0) {
-                     sendOpenPath(matches[0]); 
-                 }
-            }
-            lastKey = '';
-            return;
-        }
-        if (e.key === 'y' && lastKey === 'y') {
-            const msg = $chatStore.messages[$chatStore.cursorIndex];
-            e.preventDefault();
-            if (msg && msg.content) {
-                navigator.clipboard.writeText(msg.content);
-                // Optional: Flash visual feedback?
-                console.log("Copied to clipboard");
-            }
-            lastKey = '';
-            return;
-        }
-    }
-    
-    if (e.key !== ' ') {
-        lastKeyTime = now;
-        lastKey = e.key;
-    }
-
-    switch(e.key) {
-      case 'j':
-      case 'ArrowDown':
-        e.preventDefault();
-        chatStore.moveCursor(1);
-        scrollToCursor();
-        break;
-      case 'k':
-      case 'ArrowUp':
-        e.preventDefault();
-        chatStore.moveCursor(-1);
-        scrollToCursor();
-        break;
-      case 'd': 
-        if (e.ctrlKey) {
-             e.preventDefault(); chatStore.moveCursor(10); scrollToCursor();
-        }
-        break;
-      case 'u': 
-        if (e.ctrlKey) {
-             e.preventDefault(); chatStore.moveCursor(-10); scrollToCursor();
-        }
-        break;
-      case 'G':
-        if (e.shiftKey) {
-            chatStore.jumpToBottom();
-            tick().then(() => {
-                scrollToBottom();
-            });
-        }
-        break;
-      case 'i':
-        if (isReadOnly) return;
-        e.preventDefault();
-        inputComponent.focus();
-        break;
-      case 'Enter':
-        e.preventDefault();
-        // Prevent recursive threading
-        if ($chatStore.activeChannel.id.startsWith('thread_')) return;
-        
-        const msg = $chatStore.messages[$chatStore.cursorIndex];
-        if (!msg) return;
-
-        // --- NEW: Triage Jump ---
-        // If in aggregation view and message has a source, WARP.
-        if ($chatStore.activeChannel.service.id === 'aggregation' && msg.sourceChannel) {
-             isTargetedJump = true;
-             chatStore.switchChannel(msg.sourceChannel, msg.id);
-             
-             // Visual Polish: Scroll the specific message into view after the DOM updates
-             tick().then(() => {
-                 const el = document.getElementById(`msg-${$chatStore.cursorIndex}`);
-                 el?.scrollIntoView({ block: 'center' });
-             });
-             return;
-        }
-        // ------------------------
-
-        // Standard Thread Opening
-        chatStore.openThread(msg);
-        tick().then(() => {
-            const newChannel = $chatStore.activeChannel;
-            if (newChannel.isThread && newChannel.service.id !== 'internal') {
-                // Determine the correct parent ID (The backend needs the CHANNEL ID, not the Thread ID for the routing)
-                // The 'channel' arg in fetchThread is where the thread LIVES.
-                const parentId = newChannel.parentChannel?.id;
-                if (parentId) {
-                     // We construct a temporary identity for the fetch if needed, 
-                     // or pass the parentChannel object if fetchThread supports it.
-                     // Looking at socketStore.ts, fetchThread takes (channel, threadId, service).
-                     fetchThread(newChannel.parentChannel!, msg.id, newChannel.service);
-                }
-            }
-        });
-        break;
-      case 'Backspace':
-        chatStore.goBack();
-        break;
-    }
-  }
-
-  function startEdit() {
-      const msg = $chatStore.messages[$chatStore.cursorIndex];
-      // Simple auth check (expand later)
+  function startEdit(msg: any) {
       if (msg && chatStore.isMyMessage(msg)) {
           editingMessageId = msg.id;
-          inputComponent.setText(msg.content);
-          inputComponent.focus();
+          statusLineComponent.setText(msg.content);
+          statusLineComponent.focus();
       }
   }
 
-  function deleteMessage() {
-      const msg = $chatStore.messages[$chatStore.cursorIndex];
+  function deleteMessage(msg: any) {
       if (msg && chatStore.isMyMessage(msg)) {
           sendDelete(msg.id);
       }
   }
 
+  // --- FOCUS MANAGEMENT ---
   function onFocus() { isInsertMode = true; }
   function onBlur() { isInsertMode = false; }
   function onWindowFocus() { isWindowFocused = true; }
@@ -261,106 +232,64 @@
      if ($chatStore.isAttached) chatStore.detach();
   }
 
-  const SCROLL_OFF = 150;
-  async function scrollToCursor() {
-      await tick();
-      const activeEl = document.getElementById(`msg-${$chatStore.cursorIndex}`);
+  // --- READ STATUS LOGIC ---
+  // This remains the "business logic" owner
+  function checkReadStatus(immediate = false) {
+      if (!isWindowFocused || justSwitchedChannel) return;
+      const msgs = $chatStore.messages;
+      const idx = $chatStore.cursorIndex;
       
-      if (activeEl && messageListContainer) {
-          const containerRect = messageListContainer.getBoundingClientRect();
-          const elRect = activeEl.getBoundingClientRect();
-
-          const distTop = elRect.top - containerRect.top;
-          const distBottom = containerRect.bottom - elRect.bottom;
-
-          let targetScroll = messageListContainer.scrollTop;
-          let needsScroll = false;
-
-          if (distTop < SCROLL_OFF) {
-              targetScroll -= (SCROLL_OFF - distTop);
-              needsScroll = true;
-          } 
-          else if (distBottom < SCROLL_OFF) {
-              targetScroll += (SCROLL_OFF - distBottom);
-              needsScroll = true;
-          }
-
-          if (needsScroll) {
-              messageListContainer.scrollTo({
-                  top: targetScroll,
-                  behavior: 'smooth'
-              });
-          }
-      }
-      checkReadStatus();
-  }
-
-  async function scrollToBottom() {
-      await tick();
-      if (messageListContainer) {
-          messageListContainer.scrollTo({ 
-              top: messageListContainer.scrollHeight, 
-              behavior: 'smooth' 
-          });
-      }
-      checkReadStatus();
-  }
-
-  async function handleIncomingMessage() {
-      await tick();
-      if (!messageListContainer) return;
-
-      // 1. If we are explicitly attached (at bottom), ALWAYS scroll
-      if ($chatStore.isAttached) {
-          scrollToBottom();
-          return;
-      }
-
-      // 2. Conveyor Logic
-      const cursorEl = document.getElementById(`msg-${$chatStore.cursorIndex}`);
-      if (!cursorEl) return;
-
-      const containerRect = messageListContainer.getBoundingClientRect();
-      const cursorRect = cursorEl.getBoundingClientRect();
+      if (idx < 0 || msgs.length === 0) return;
       
-      // Distance from top of viewport
-      const offset = cursorRect.top - containerRect.top;
-      
-      console.log(`[Conveyor] Offset: ${offset}px`); // Debug
+      const isAtBottom = $chatStore.isAttached || idx >= msgs.length - 1;
+      if (isAtBottom) { unreadMarkerIndex = -1; }
 
-      // If the cursor is decently far down (>150px), pull the belt.
-      // We use a larger threshold to prevent jitter near the top.
-      if (offset > 150) {
-           // Instead of full scrollToBottom (which might jump too far), 
-           // we can just nudge it by the approximate height of a message, 
-           // OR just stick to scrollToBottom if we want to ride the wave.
-           scrollToBottom();
+      if (isAtBottom || immediate) {
+          clearTimeout(markReadTimer);
+          const doMarkRead = () => {
+              if ((!immediate && justSwitchedChannel) || !$chatStore.activeChannel) return;
+              const channel = $chatStore.activeChannel;
+              const targetMsg = msgs[idx];
+              
+              if (!targetMsg || lastAckedMsgId === targetMsg.id) return;
+              
+              if (channel.service.id !== 'internal') {
+                  const realId = channel.id.startsWith('thread_') ? channel.parentChannel?.id : channel.id;
+                  if (realId) {
+                      sendMarkRead(realId, targetMsg.id, channel.service.id);
+                      chatStore.markReadUpTo(channel, targetMsg);
+                      lastAckedMsgId = targetMsg.id;
+                  }
+              }
+          };
+          
+          if (immediate) doMarkRead();
+          else markReadTimer = setTimeout(doMarkRead, 1000);
       }
   }
 
-  // 1. Channel Switch Listener
+  // --- REACTIVE ORCHESTRATION ---
+  
+  // 1. Channel Switching Reset
   $: if ($chatStore.activeChannel.id !== currentChannelId) {
       currentChannelId = $chatStore.activeChannel.id;
       justSwitchedChannel = true;
       unreadMarkerIndex = -1;
-
       lastAckedMsgId = null;
       maxReadIndex = -1;
-
       clearTimeout(markReadTimer); 
       clearTimeout(positionTimer);
   }
 
+  // 2. Read Status Trigger
   $: if ($chatStore.cursorIndex !== -1 && !justSwitchedChannel) {
       checkReadStatus();
   }
 
-  // 2. Message Stream Logic
-$: if ($chatStore.messages) {
-      const msgs = $chatStore.messages;
+  // 3. Initial Load / Jump Logic
+  $: if ($chatStore.messages) {
       const channel = $chatStore.activeChannel;
       
-      // A. LOADING PHASE (Debounced)
       if (justSwitchedChannel) {
           clearTimeout(positionTimer);
           positionTimer = setTimeout(() => {
@@ -368,29 +297,24 @@ $: if ($chatStore.messages) {
               if (finalMsgs.length === 0) return;
 
               const threshold = (channel.lastReadAt || 0) * 1000;
-
               if (channel.lastReadAt) {
                   const firstUnreadIdx = finalMsgs.findIndex(m => m.timestamp.getTime() > threshold);
                   
                   if (firstUnreadIdx !== -1) {
-                      // 1. SET VISUAL MARKER
-                      unreadMarkerIndex = firstUnreadIdx === 0 ? -2 : firstUnreadIdx - 1;
+                      // FIX 2: Suppress Red Marker on Targeted Jump
+                      // If we intentionally jumped here, we don't want the visual noise of "Unread".
+                      if (!isTargetedJump) {
+                          unreadMarkerIndex = firstUnreadIdx === 0 ? -2 : firstUnreadIdx - 1;
+                      } else {
+                          unreadMarkerIndex = -1; // Force Clear
+                      }
 
-                      // 2. JUMP
                       if (!isTargetedJump) {
                           const targetCursor = Math.max(0, firstUnreadIdx - 1);
                           maxReadIndex = targetCursor;
                           chatStore.jumpTo(targetCursor);
-                          
-                          if (messageListContainer) {
-                              tick().then(() => {
-                                  const el = document.getElementById(`msg-${targetCursor}`);
-                                  el?.scrollIntoView({ block: 'center' });
-                              });
-                          }
+                          tick().then(() => messageListComponent.scrollToCursor());
                       } else {
-                          // TARGETED JUMP (e.g. from Inbox)
-                          // We are already at the right spot. Just sync the read tracker.
                           maxReadIndex = $chatStore.cursorIndex;
                       }
                   } else {
@@ -399,85 +323,22 @@ $: if ($chatStore.messages) {
                       maxReadIndex = finalMsgs.length - 1;
                   }
               } else {
-                  // No history
                   if (!isTargetedJump) chatStore.jumpToBottom();
               }
               
-              // --- THE FIX ---
-              // 1. Release the "Loading" lock
               justSwitchedChannel = false;
               
-              checkReadStatus(isTargetedJump);
+              // FIX 3: Skip checkReadStatus if we already did it eagerly
+              if (!isTargetedJump) {
+                  checkReadStatus(false);
+              }
+              
               isTargetedJump = false; 
           }, 50);
-      }
-      
-      // B. LIVE PHASE (Standard Arrival)
-      else {
-           handleIncomingMessage();
-           checkReadStatus();
-      }
-      
-      lastMessageCount = msgs.length;
+      } 
   }
 
-  function handleCancel() {
-      if (editingMessageId) {
-          editingMessageId = null; // Exit Edit Mode state
-          if (inputComponent) inputComponent.setText(''); // Clear the buffer
-      }
-  }
-
-  // 3. Mark Read Logic
-  function checkReadStatus(immediate = false) {
-      // 1. Guards
-      if (!isWindowFocused || justSwitchedChannel) return;
-      const msgs = $chatStore.messages;
-      const idx = $chatStore.cursorIndex;
-      
-      if (idx < 0 || msgs.length === 0) return;
-
-      const isAtBottom = $chatStore.isAttached || idx >= msgs.length - 1;
-
-      // 2. VISUALS: FORCE CLEAR
-      // FIX: If we are literally at the last message (index match), 
-      // we must clear the marker, even if 'isAttached' is technically false.
-      if (isAtBottom) {
-          unreadMarkerIndex = -1;
-      }
-
-      // 3. NETWORK: Mark Read
-      if (isAtBottom || immediate) {
-          clearTimeout(markReadTimer);
-          
-          const doMarkRead = () => {
-              if ((!immediate && justSwitchedChannel) || !$chatStore.activeChannel) return;
-              
-              const channel = $chatStore.activeChannel;
-              const targetMsg = msgs[idx];
-              
-              if (!targetMsg || lastAckedMsgId === targetMsg.id) return;
-
-              if (channel.service.id !== 'internal') {
-                  const realId = channel.id.startsWith('thread_') ? channel.parentChannel?.id : channel.id;
-                  if (realId) {
-                      console.log(`[Mark Read] ${channel.name} up to ${targetMsg.id}`);
-                      sendMarkRead(realId, targetMsg.id, channel.service.id);
-                      chatStore.markChannelAsRead(channel, targetMsg.id);
-                      lastAckedMsgId = targetMsg.id;
-                  }
-              }
-          };
-
-          if (immediate) {
-              doMarkRead();
-          } else {
-              markReadTimer = setTimeout(doMarkRead, 1000); 
-          }
-      }
-  }
-  
-  // High Water Mark Logic
+  // 4. Update Unread Marker High Water Mark
   $: {
       const currentCursor = $chatStore.cursorIndex;
       if (unreadMarkerIndex !== -1) {
@@ -487,151 +348,30 @@ $: if ($chatStore.messages) {
   }
 </script>
 
-<svelte:window on:keydown={handleGlobalKeydown} on:focus={onWindowFocus} on:blur={onWindowBlur} />
+<svelte:window on:keydown={handleKeydown} on:focus={onWindowFocus} on:blur={onWindowBlur} />
 
 <main class="cockpit">
-  <aside class="sidebar">
-      <div class="dot hot" class:active={$hudStore.ego > 0}></div>
-      
-      <div class="dot warm" class:active={$hudStore.signal > 0}></div>
-      
-      <div class="dot cold"></div>
-  </aside>
+  <Sidebar />
 
   <div class="buffer-container">
-      
-      <!-- THREAD HEADER -->
-      {#if $chatStore.activeChannel?.id?.startsWith('thread_')}
-          <div class="thread-banner">
-              <div class="thread-meta">
-                  <span class="icon">⤴</span> 
-                  <span class="title">Thread</span>
-                  <span class="hint">[Backspace to return]</span>
-              </div>
+      <ThreadBanner />
 
-              {#if $chatStore.activeChannel.parentMessage}
-                  <div class="parent-context">
-                      <span class="parent-author">{$chatStore.activeChannel.parentMessage.author}:</span>
-                      <span class="parent-text">
-                        {$chatStore.activeChannel.parentMessage.content.slice(0, 100)}
-                        {$chatStore.activeChannel.parentMessage.content.length > 100 ? '...' : ''}
-                      </span>
-                  </div>
-              {/if}
-          </div>
-      {/if}
+      <MessageList 
+          bind:this={messageListComponent} 
+          {unreadMarkerIndex}
+      />
 
-      <div class="message-list" bind:this={messageListContainer} class:is-thread={$chatStore.activeChannel.id.startsWith('thread_')}>
-        {#each $chatStore.messages as msg, index}
-           {@const isUnread = unreadMarkerIndex !== -1 && index > unreadMarkerIndex}
-           
-           {@const prevMsg = $chatStore.messages[index - 1]}
-           {@const isNewDay = !prevMsg || prevMsg.timestamp.getDate() !== msg.timestamp.getDate()}
-           
-           {@const currentSource = msg.sourceChannel?.id || 'current'}
-           {@const prevSource = prevMsg?.sourceChannel?.id || 'current'}
-           {@const isNewContext = ($chatStore.activeChannel.service.id === 'aggregation') && (currentSource !== prevSource)}
-
-           {#if isNewDay || isNewContext}
-                <div class="context-separator">
-                    <div class="line"></div>
-                    <div class="label">
-                        {#if isNewContext && msg.sourceChannel}
-                            <span class="context-tag">
-                                [{msg.sourceChannel.service.name}] #{msg.sourceChannel.name}
-                            </span>
-                        {/if}
-                        
-                        {#if isNewDay}
-                            <span class="date-tag">
-                                {msg.timestamp.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
-                            </span>
-                        {/if}
-                    </div>
-                </div>
-           {/if}
-           <div 
-            id="msg-{index}"
-            class="message-line" 
-            class:active={index === $chatStore.cursorIndex} 
-            class:unread={isUnread}
-          >
-            <div class="line-content">
-               <span class="meta">
-                    <span class="time">{msg.timestamp.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-                    <span class="author" style="color: {getUserColor(msg.author.id)}">
-                      {msg.author.name}
-                    </span>
-                </span>
-                
-                <span class="text">
-                    <Markdown content={msg.content} />
-                    
-                    {#if msg.attachments && msg.attachments.length > 0}
-                        <div class="attachment-grid">
-                            {#each msg.attachments as file}
-                                <div class="file-chip" title={file.path}>
-                                    <span class="icon">📎</span>
-                                    <span class="filename">{file.name}</span>
-                                </div>
-                            {/each}
-                        </div>
-                    {/if}
-                </span>
-
-                <div class="indicators">
-                    {#if msg.reactions}
-                        {#each Object.entries(msg.reactions) as [emoji, users]}
-                             {@const iReacted = $chatStore.currentUser && users.includes($chatStore.currentUser.id)}
-                             <button 
-                                class="reaction-tag" 
-                                class:active={iReacted}
-                                on:click|stopPropagation={() => sendReaction(msg.id, emoji, iReacted ? 'remove' : 'add')}
-                             >
-                                {emoji} <span class="count">{users.length}</span>
-                             </button>
-                        {/each}
-                    {/if}
-
-                    {#if msg.replyCount}
-                        <span class="reply-tag">
-                            {msg.replyCount} ↪
-                        </span>
-                    {/if}
-                </div>
-            </div>
-          </div>
-        {/each}
-      </div>
-
-      <div class="status-line">
-          <div class="section mode" class:insert={isInsertMode} class:edit={editingMessageId !== null}>
-              {editingMessageId ? 'EDIT' : (isInsertMode ? 'INSERT' : 'NORMAL')}
-          </div>
-          <div class="section branch">
-               {$chatStore.activeChannel.name.slice(0, 20)}
-          </div>
-          <div class="section spacer input-wrapper" 
-               on:focusin={onFocus} 
-               on:focusout={onBlur}>
-
-              <span class="prompt">❯</span>
-
-              <InputGhost 
-                  bind:this={inputComponent} 
-                  on:submit={(e) => handleSend(e.detail)}
-                  on:cancel={handleCancel}
-              />
-              
-          </div>
-          <div class="section info">
-               {$chatStore.cursorIndex + 1}:{$chatStore.messages.length} 
-          </div>
-          <div class="section logo-container">
-              <span style="color: var(--ronin-yellow); font-size: 1.2em;">⬢</span>
-          </div>
-      </div>
+      <StatusLine 
+          bind:this={statusLineComponent}
+          {isInsertMode}
+          {editingMessageId}
+          on:submit={(e) => handleSend(e.detail)}
+          on:cancel={handleCancel}
+          on:focus={onFocus}
+          on:blur={onBlur}
+      />
   </div>
+
   <Inspector />
 </main>
 
@@ -647,185 +387,29 @@ $: if ($chatStore.messages) {
 
 <style>
   :root {
-    --sumi-ink-0: #16161D; --sumi-ink-1: #1F1F28; --sumi-ink-2: #2A2A37;
+    --sumi-ink-0: #16161D;
+    --sumi-ink-1: #1F1F28; --sumi-ink-2: #2A2A37;
     --sumi-ink-3: #363646; --fuji-white: #DCD7BA; --katana-gray: #727169;
     --crystal-blue: #7E9CD8; --spring-green: #98BB6C; --ronin-yellow: #FF9E3B;
-    --samurai-red: #E82424; --wave-blue: #2D4F67; 
+    --samurai-red: #E82424; --wave-blue: #2D4F67;
     --font-main: "CodeNewRoman Nerd Font", 'JetBrains Mono', monospace; 
   }
 
-  .cockpit { display: flex; height: 100vh; width: 100vw; background: var(--sumi-ink-1); color: var(--fuji-white); font-family: var(--font-main); overflow: hidden; }
-  
-  .sidebar { width: 12px; background: var(--sumi-ink-0); border-right: 1px solid var(--sumi-ink-2); display: flex; flex-direction: column; align-items: center; padding-top: 10px; gap: 8px; }
-  .dot { 
-      width: 4px; height: 4px; border-radius: 50%; 
-      transition: all 0.3s ease;
-      opacity: 0.2; /* Dim by default */
+  .cockpit { 
+      display: flex; 
+      height: 100vh; 
+      width: 100vw; 
+      background: var(--sumi-ink-1); 
+      color: var(--fuji-white); 
+      font-family: var(--font-main); 
+      overflow: hidden; 
   }
   
-  .dot.active {
-      opacity: 1;
-      transform: scale(1.5);
-      box-shadow: 0 0 8px currentColor; /* Glow */
-  }
-  
-  /* Add a subtle pulse animation for active dots */
-  @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 currentColor; }
-      70% { box-shadow: 0 0 10px 4px transparent; }
-      100% { box-shadow: 0 0 0 0 transparent; }
-  }
-  
-  .dot.active {
-      animation: pulse 2s infinite;
-  }
-  .dot.hot { background: var(--samurai-red); box-shadow: 0 0 4px var(--samurai-red); }
-  .dot.warm { background: var(--ronin-yellow); }
-  .dot.cold { 
-      background: var(--crystal-blue); /* Ensure it's blue */
-      opacity: 0.5; /* Boost from default 0.2 */
-  }
-
-  .buffer-container {
-          flex-grow: 1; 
-          min-width: 0;
-          display: flex; 
-          flex-direction: column; 
-          position: relative;
-  }
-
-  /* THREAD BANNER */
-  .thread-banner { background: var(--sumi-ink-2); border-bottom: 1px solid var(--sumi-ink-3); padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; z-index: 10; }
-  .thread-meta { display: flex; align-items: center; gap: 10px; font-size: 0.8rem; color: var(--ronin-yellow); }
-  .thread-meta .hint { color: var(--katana-gray); font-style: italic; margin-left: auto; }
-  
-  .parent-context { background: rgba(0, 0, 0, 0.2); padding: 6px; border-left: 2px solid var(--crystal-blue); font-size: 0.85rem; display: flex; gap: 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  .parent-author { font-weight: bold; color: var(--crystal-blue); }
-  .parent-text { color: var(--fuji-white); opacity: 0.8; overflow: hidden; text-overflow: ellipsis; }
-
-  /* MESSAGE LIST */
-  .message-list { flex-grow: 1; overflow-y: auto; padding-top: 50px; display: flex; flex-direction: column; -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 50px, black 100%); mask-image: linear-gradient(to bottom, transparent 0%, black 50px, black 100%); }
-  .message-list.is-thread { background-color: #1a1a22; padding-top: 10px; -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 20px, black 100%); mask-image: linear-gradient(to bottom, transparent 0%, black 20px, black 100%); }
-
-  .message-line { display: flex; padding: 1px 10px; border-left: 2px solid transparent; opacity: 0.7; transition: all 0.1s ease; }
-  .message-line.active { background: var(--sumi-ink-2); border-left-color: var(--crystal-blue); opacity: 1; }
-  .message-line.unread { border-left-color: var(--samurai-red); background: #25252f; }
-
-  .line-content { display: flex; gap: 12px; align-items: baseline; width: 100%; }
-  
-  .meta { min-width: 140px; text-align: right; font-size: 0.8rem; color: var(--katana-gray); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
-  .author { font-weight: bold; }
-  
-  .text { flex-grow: 1; word-break: break-word; min-width: 0; line-height: 1.3; }
-
-  /* INDICATORS (Right Column) */
-  .indicators { margin-left: auto; display: flex; align-items: center; gap: 5px; flex-shrink: 0; transform: translateY(1px); }
-  .reply-tag { display: inline-flex; align-items: center; font-size: 0.75rem; color: var(--ronin-yellow); background: rgba(255, 158, 59, 0.05); padding: 0 6px; border-radius: 2px; font-family: var(--font-main); line-height: 1; height: 1.2em; }
-  .message-line.active .reply-tag { background: var(--ronin-yellow); color: var(--sumi-ink-0); }
-
-  /* STATUS BAR */
-  .status-line { min-height: 24px; display: flex; align-items: stretch; background: var(--sumi-ink-0); border-top: 1px solid var(--sumi-ink-3); font-size: 0.8rem; padding: 1px 0; }
-  .section { padding: 0 10px; display: flex; align-items: center; }
-  .mode { background: var(--crystal-blue); color: var(--sumi-ink-0); font-weight: bold; }
-  .mode.insert { background: var(--spring-green); }
-  .mode.edit { background: var(--ronin-yellow); }
-  .branch { background: var(--sumi-ink-2); color: var(--fuji-white); }
-  .spacer { flex-grow: 1; display: flex; background: var(--sumi-ink-1); }
-  .input-wrapper { display: flex; align-items: center; padding-top: 2px; }
-  .prompt { color: var(--crystal-blue); font-weight: bold; margin-right: 8px; align-self: flex-start; margin-top: 1px; }
-  .info { background: var(--sumi-ink-2); color: var(--fuji-white); }
-  .logo-container { background: var(--sumi-ink-1); }
-  .reaction-tag {
-      background: var(--sumi-ink-3);
-      border: 1px solid transparent;
-      color: var(--fuji-white);
-      border-radius: 4px;
-      padding: 0 4px;
-      margin-right: 4px;
-      font-size: 0.75rem;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 3px;
-      transition: all 0.1s;
-  }
-  .reaction-tag:hover { border-color: var(--ronin-yellow); }
-  .reaction-tag.active {
-      background: rgba(152, 187, 108, 0.2); /* Spring Green tint */
-      border-color: var(--spring-green);
-      color: var(--spring-green);
-  }
-  .count { font-size: 0.7em; opacity: 0.8; }
-  .attachment-grid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 4px;
-  }
-  
-  .file-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      background: var(--sumi-ink-3);
-      border: 1px solid var(--sumi-ink-3);
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-size: 0.8rem;
-      color: var(--fuji-white);
-      cursor: pointer;
-      transition: all 0.2s ease;
-  }
-
-  .file-chip:hover {
-      border-color: var(--crystal-blue);
-      background: var(--sumi-ink-2);
-  }
-
-  .file-chip .icon {
-      color: var(--ronin-yellow);
-      font-size: 0.9em;
-  }
-
-  .file-chip .filename {
-      /* Truncate long filenames nicely */
-      max-width: 200px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-  }
-  /* CONTEXT SEPARATOR */
-  .context-separator {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 16px 20px 8px 0; /* Right padding for alignment */
-      opacity: 0.6;
-      margin-top: 8px;
-  }
-  
-  .context-separator .line {
-      flex-grow: 1;
-      height: 1px;
-      background: var(--sumi-ink-3);
-  }
-  
-  .context-separator .label {
-      font-size: 0.75rem;
-      color: var(--katana-gray);
-      display: flex;
-      gap: 12px;
-      white-space: nowrap;
-  }
-
-  .context-tag {
-      color: var(--ronin-yellow);
-      font-weight: bold;
-      letter-spacing: 0.5px;
-  }
-
-  .date-tag {
-      font-family: var(--font-main);
-      color: var(--fuji-white);
+  .buffer-container { 
+      flex-grow: 1; 
+      min-width: 0; 
+      display: flex; 
+      flex-direction: column; 
+      position: relative; 
   }
 </style>

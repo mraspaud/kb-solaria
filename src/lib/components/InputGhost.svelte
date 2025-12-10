@@ -4,6 +4,9 @@
   import { sendTyping } from '../socketStore';  
   import { chatStore } from '../stores/chat';
 
+  import { InputController } from '../logic/InputController';
+  import { DEFAULT_KEYMAP } from '../logic/keymap';
+
   let textarea: HTMLTextAreaElement;
   let backdrop: HTMLElement;
   const dispatch = createEventDispatcher(); 
@@ -70,46 +73,52 @@
   }
 
   async function handleKeydown(e: KeyboardEvent) {
+      // 1. ESCAPE: always prioritize cancelling insert mode
       if (e.key === 'Escape') {
           e.preventDefault();
           e.stopPropagation();
           
           if (state.match) {
-              // Priority 1: If menu is open, just close it (Soft Reset)
               inputEngine.reset();
           } else {
-              // Priority 2: If menu is closed, exit Insert Mode (Hard Blur)
               dispatch('cancel');
               textarea.blur();
           }
           return;
       }
-      // 1. NAVIGATION (If Trigger Active)
-      if (state.match) {
-          if (e.key === 'Tab' && $ghostText) {
-              e.preventDefault();
+
+      // 2. TAB TRAP (The Fix)
+      // Always prevent Tab from moving focus away, regardless of match state
+      if (e.key === 'Tab') {
+          e.preventDefault(); // Stop the browser from changing focus
+          
+          // Only perform completion logic if we actually have a match
+          if (state.match && $ghostText) {
               const resolved = inputEngine.resolve();
               if (resolved) {
-                  // Update DOM immediately
                   textarea.value = $inputEngine.raw;
-                  // Restore cursor
                   await tick();
                   textarea.setSelectionRange($inputEngine.cursorPos, $inputEngine.cursorPos);
               }
+          }
+          return;
+      }
+
+      // 3. NAVIGATION (Only if Match Active)
+      if (state.match) {
+          // Resolve the key using global config
+          const cmd = InputController.resolveKey(e, DEFAULT_KEYMAP);
+
+          // We accept specific list commands OR generic cursor commands (like ArrowDown)
+          if (cmd === 'SELECT_PREV') {
+              e.preventDefault();
+              inputEngine.moveSelection(1);
               return;
           }
 
-          if (e.key === 'ArrowUp' || (e.key === 'k' && e.ctrlKey)) {
-              e.preventDefault(); inputEngine.moveSelection(1); return;
-          }
-          if (e.key === 'ArrowDown' || (e.key === 'j' && e.ctrlKey)) {
-              e.preventDefault(); inputEngine.moveSelection(-1); return;
-          }
-          // ESC cancels autocomplete but keeps text
-          if (e.key === 'Escape') {
+          if (cmd === 'SELECT_NEXT') {
               e.preventDefault();
-              e.stopPropagation(); // Don't trigger global ESC (clear buffer)
-              inputEngine.update(textarea.value, textarea.selectionEnd); // soft reset
+              inputEngine.moveSelection(-1);
               return;
           }
       }
