@@ -1,47 +1,135 @@
-# Svelte + TS + Vite
+### 1\. Installation
 
-This template should help get you started developing with Svelte and TypeScript in Vite.
+**Prerequisites**
+You need `git`, `npm` (Node.js), and [`uv`](https://www.google.com/search?q=%5Bhttps://github.com/astral-sh/uv%5D\(https://github.com/astral-sh/uv\)).
 
-## Recommended IDE Setup
+**Setup**
+Solaria is a "fat" repository containing the backend engine as a submodule.
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
+```bash
+# 1. Clone recursively (Critical: pulls in the backend engine)
+git clone --recursive https://github.com/your-username/kb-solaria.git
+cd kb-solaria
 
-## Need an official Svelte framework?
+# 2. Sync Python environment (installs backend, aiohttp, dev tools)
+uv sync
 
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
-
-## Technical considerations
-
-**Why use this over SvelteKit?**
-
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
-
-This template contains as little as possible to get started with Vite + TypeScript + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
-
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
-
-**Why `global.d.ts` instead of `compilerOptions.types` inside `jsconfig.json` or `tsconfig.json`?**
-
-Setting `compilerOptions.types` shuts out all other types not explicitly listed in the configuration. Using triple-slash references keeps the default TypeScript setting of accepting type information from the entire workspace, while also adding `svelte` and `vite/client` type information.
-
-**Why include `.vscode/extensions.json`?**
-
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
-
-**Why enable `allowJs` in the TS template?**
-
-While `allowJs: false` would indeed prevent the use of `.js` files in the project, it does not prevent the use of JavaScript syntax in `.svelte` files. In addition, it would force `checkJs: false`, bringing the worst of both worlds: not being able to guarantee the entire codebase is TypeScript, and also having worse typechecking for the existing JavaScript. In addition, there are valid use cases in which a mixed codebase may be relevant.
-
-**Why is HMR not preserving my local component state?**
-
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/rixo/svelte-hmr#svelte-hmr).
-
-If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
-
-```ts
-// store.ts
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
+# 3. Install Frontend dependencies
+# (You can also let 'poe' do this automatically on first run)
+npm install
 ```
+
+-----
+
+### 2\. Configuration (`config.toml`)
+
+Solaria uses a straightforward TOML file to define your chat universe. Create a file named `config.toml`.
+
+**The Philosophy:**
+
+  * **Section Name:** The internal ID for the service (e.g., `[work_slack]`).
+  * **`backend`:** The driver to use (`slack`, `rocket.chat`, `mattermost`, `dummy`).
+  * **`name`:** The short label displayed in the status bar.
+  * **Credentials:** Solaria attempts to auto-extract session cookies/tokens from your local Firefox profile for seamless login.
+
+**Example Configuration:**
+
+```toml
+# 1. Rocket.Chat
+[rocket_chat]
+backend = "rocket.chat"
+name = "EWC"
+domain = "chat.ewc.com"
+user = "goodold.me"
+
+# 2. Slack
+# Note: Slack relies heavily on Firefox cookie extraction.
+# Ensure you are logged into this workspace in Firefox.
+[pytroll_slack]
+backend = "slack"
+name = "Pytroll"
+
+# 3. Mattermost
+[smhi_mattermost]
+backend = "mattermost"
+name = "Work"
+domain = "mattermost.work.com"
+```
+
+-----
+
+### 3\. Quickstart Guide
+
+**Make sure you log in to the different services in firefox before starting!**
+Solaria uses stored cookies and local browser storage to fetch tokens and credentials to log in.
+
+
+**Development Mode (Hybrid)**
+This runs the Frontend (Vite) and Backend (Python) as separate processes with Hot Module Replacement (HMR). Perfect for hacking.
+
+```bash
+uv run poe dev config.toml
+```
+
+  * **Frontend:** `http://localhost:5173` (Browser opens automatically)
+  * **Backend API:** `http://localhost:4722`
+
+<!-- **Production Mode (Appliance)** -->
+<!-- This builds the frontend into static assets and serves the entire application from a single Python process. This is how the "finished product" feels. -->
+<!---->
+<!-- ```bash -->
+<!-- uv run poe build config.toml -->
+<!-- ``` -->
+<!---->
+<!--   * **Appliance:** `http://localhost:4722` -->
+
+-----
+
+### 4\. Default Keybindings
+
+Solaria is modal, heavily inspired by Vim.
+
+**Global / Normal Mode**
+
+| Key | Action |
+| :--- | :--- |
+| `Down` / `Up` | Move cursor Down / Up |
+| `j` / `k` | Move cursor Down / Up |
+| `Enter` | Jump to channel / Open thread |
+| `Backspace` | Jump to back in history |
+| `i` | **Insert Mode:** Start typing a message |
+| `Space` | **Leader Key** (Triggers command menu, see below) |
+| `G` | Jump to bottom of history, and mark the channel as read |
+| `z z` | Center view on cursor |
+| `Ctrl + d` | Page Down |
+| `Ctrl + u` | Page Up |
+
+**Message Actions** (Cursor must be on a message)
+
+| Key | Action |
+| :--- | :--- |
+| `r` | **React** (Opens emoji picker) |
+| `c c` | **Edit** message |
+| `d d` | **Delete** message |
+| `y y` | **Yank** (Copy) message text |
+| `g f` | **Go File:** Open attachment(s) locally |
+| `g d` | **Get Download:** Save attachment(s) to Downloads |
+| `g x` | **Go Link:** Open URL(s) in browser |
+
+**Insert Mode**
+
+| Key | Action |
+| :--- | :--- |
+| `Esc` | Exit to Normal Mode |
+| `Tab` | Autocomplete (User/Channel) |
+| `Ctrl + j` / `k` | Select Next/Prev item in Autocomplete list |
+| `Up` / `Down` | Select Next/Prev item in Autocomplete list |
+| `Enter` | Send Message |
+
+**Leader Commands** (Press `Space` then...)
+
+| Key | Action |
+| :--- | :--- |
+| `Space` | **Quick Switch:** Toggle between last two channels |
+| `e` | Toggle **Inspector** (Metadata view) |
+| `r` | Toggle **Reactions** view (if applicable) |

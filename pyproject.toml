@@ -1,0 +1,26 @@
+[project]
+name = "kb-solaria-app"
+version = "0.1.0"
+description = "The Solaria Command Center"
+requires-python = ">=3.12"
+dependencies = [
+    # Install the backend submodule in editable mode
+    "kbunified", 
+    "aiohttp",
+]
+
+[dependency-groups]
+dev = ["watchfiles", "poethepoet"]
+
+[tool.uv.sources]
+kbunified = { path = "./kbunified", editable = true }
+
+[tool.poe.tasks]
+# 1. Basic Helpers
+install-frontend = { cmd = "npm install", help = "Install JS dependencies" }
+
+# 2. Dev Mode (Hybrid HMR)
+[tool.poe.tasks.dev]
+script = "tasks:run_dev"
+help = "Run Hybrid Dev Mode (Vite + Python HMR)"
+args = [{ name = "config_file", positional = true, required = true }]
