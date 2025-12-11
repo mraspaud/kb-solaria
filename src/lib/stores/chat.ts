@@ -141,11 +141,15 @@ function createChatStore() {
                 const myIdentity = s.identities[channel.service.id];
                 const myThreads = s.participatedThreads;
 
-                // If I am the author...
-                if (myIdentity && msg.author.id === myIdentity.id && msg.threadId) {
-                    myThreads.add(msg.threadId);
+                const isMe = myIdentity && msg.author.id === myIdentity.id;
+                // DEBUG LOG: If you see "Self-Count Mismatch" in your browser console, send me this line!
+                if (myIdentity && !isMe && msg.author.name === myIdentity.name) {
+                    console.warn("Self-Count Mismatch:", { msgId: msg.author.id, myId: myIdentity.id });
                 }
-                
+                if (isMe && msg.threadId) {
+                   myThreads.add(msg.threadId);
+                }
+
                 // --- B. THE BRAIN (Classification) ---
                 const verdict = BucketAnalyzer.classify(msg, channel, myIdentity, myThreads);
                 msg.bucket = verdict; // Tag the message
@@ -193,11 +197,10 @@ function createChatStore() {
                 }
                 // 2. Unread Logic (Existing)
                 let newUnread = s.unread;
-                if (channel.id !== s.activeChannel.id) {
+                if (channel.id !== s.activeChannel.id && !isMe && verdict !== Bucket.NOISE) {
                     const current = s.unread[channel.id] || { count: 0, hasMention: false };
                     
                     const isMention = (verdict === Bucket.EGO);
-
                     newUnread = {
                         ...s.unread,
                         [channel.id]: {
@@ -473,10 +476,11 @@ function createChatStore() {
                     });
                 }
 
-                // 2. DO NOT DELETE UNREAD STATE
-                // We used to do: delete newUnread[channel.id]; 
-                // We removed that. The backend will send a 'channel_list' or update event
-                // with the new count (e.g. 5 -> 4) eventually. 
+                // 2. OPTIMISTIC UPDATE (FIXED)
+                // We clear the local unread state immediately for UI responsiveness.
+                // The backend will eventually sync the truth, but we shouldn't wait for it.
+                const newUnread = { ...s.unread };
+                delete newUnread[channel.id];
                 
                 // 3. PURGE TRIAGE & INBOX (Existing Logic)
                 const triageBuf = workspace.getBuffer('triage');

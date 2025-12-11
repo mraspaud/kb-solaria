@@ -83,7 +83,8 @@ service.onEvent((payload) => {
                     lastReadAt: c.last_read_at,
                     lastPostAt: c.last_post_at,
                     mass: c.mass !== undefined ? c.mass : 0,
-                    starred: c.starred
+                    starred: c.starred,
+                    category: c.category
                 };
                 
                 channels.push(identity);
@@ -162,7 +163,7 @@ service.onEvent((payload) => {
                 starred: knownParent?.starred, 
                 mass: knownParent?.mass,
                 lastReadAt: knownParent?.lastReadAt,
-                
+                category: knownParent?.category,
                 threadId: isThread ? threadId : undefined,
                 parentChannel: isThread ? parentIdentity : undefined
             };
@@ -371,8 +372,8 @@ export function sendDelete(id: string) {
 export function fetchThread(channel: ChannelIdentity, threadId: string, serviceId: ServiceIdentity) {
     service.send({
         command: "fetch_thread",
-        service: serviceId,
-        channel: channel,
+        service_id: serviceId.id,
+        channel_id: channel.id,
         thread_id: threadId
     });
 }

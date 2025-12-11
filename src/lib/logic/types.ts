@@ -11,6 +11,8 @@ export interface UserIdentity {
     channelPrefix?: string;
 }
 
+export type ChannelCategory = 'channel' | 'direct' | 'group';
+
 export interface ChannelIdentity {
     id: string;
     name: string;
@@ -23,6 +25,7 @@ export interface ChannelIdentity {
     lastPostAt?: number;
     mass?: number;
     starred?: boolean;
+    category?: ChannelCategory;
 }
 
 export interface Attachment {

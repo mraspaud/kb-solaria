@@ -9,6 +9,10 @@ export class BucketAnalyzer {
         myThreads: Set<string>
     ): Bucket {
 
+        // My own words are "Noise" to the Input Stream.
+        if (me && msg.author.id === me.id) {
+            return Bucket.NOISE;
+        }
         // --- 0. HISTORY GUARD (The Fix) ---
         // If the channel has a known "Last Read" time, and this message is OLDER than that,
         // it is history. We treat it as NOISE (archived), never EGO or SIGNAL.
@@ -40,8 +44,21 @@ export class BucketAnalyzer {
             return Bucket.CONTEXT;
         }
 
+        // 4. DIRECT DM -> TRIAGE
+        if (channel.category === 'direct') {
+            return Bucket.EGO;
+        }
+        
+        // 5. GROUP DM -> INBOX
+        if (channel.category === 'group') {
+            return Bucket.SIGNAL;
+        }
+
         // 3. SIGNAL CHECK
         if ((channel as any).starred) {
+            if (msg.threadId && !myThreads.has(msg.threadId)) {
+                return Bucket.NOISE;
+            }
             return Bucket.SIGNAL;
         }
 

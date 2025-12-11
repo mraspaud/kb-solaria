@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, onMount, onDestroy } from 'svelte';
   import { chatStore } from '../stores/chat';
   import { sendReaction } from '../socketStore';
   import { ViewportLogic } from '../logic/ViewportLogic';
@@ -9,9 +9,12 @@
   export let unreadMarkerIndex = -1;
 
   let container: HTMLElement;
+  let resizeObserver: ResizeObserver;
   const SCROLL_OFF = 150;
 
   let lastSeenMessageId: string | null = null
+  let previousCursorId: string | null = null; // NEW: Track logical cursor position
+
   // --- PUBLIC API ---
 
   export async function scrollToCursor() {
@@ -32,10 +35,12 @@
       }
   }
 
-  export async function scrollToBottom() {
+  export async function scrollToBottom(options: { instant?: boolean } = {}) {
       await tick();
       if (container) {
-          container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+          container.scrollTo({ 
+                          top: container.scrollHeight, 
+                          behavior: options.instant ? 'auto' : 'smooth' });
       }
   }
 
@@ -59,18 +64,62 @@
       }
   }
 
-  // Watch for new messages to trigger conveyor logic
-  // (We use a simple length check or reference check)
+
+  // This catches the moment App.svelte decides "All read, go to bottom" (isAttached: false -> true).
+  $: if ($chatStore.isAttached && container) {
+      // Use instant behavior to avoid visual jumping
+      container.scrollTo({ top: container.scrollHeight, behavior: 'instant' });
+      
+      // Safety Double-Tap: Sometimes the browser needs a frame to acknowledge the layout shift
+      requestAnimationFrame(() => {
+          if (container) container.scrollTo({ top: container.scrollHeight, behavior: 'instant' });
+      });
+  }
+
+
+  // --- LIFECYCLE & OBSERVERS ---
+  
+  onMount(() => {
+      resizeObserver = new ResizeObserver(() => {
+          // If the store says we should be at the bottom, ENFORCE IT.
+          if ($chatStore.isAttached && container) {
+              // Use instant scroll to prevent jitter during load
+              container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
+          }
+      });
+      
+      if (container) resizeObserver.observe(container);
+  });
+
+  onDestroy(() => {
+      resizeObserver?.disconnect();
+  });
+
+  // Watch for message updates
   $: if ($chatStore.messages) {
       const msgs = $chatStore.messages;
       const lastMsg = msgs[msgs.length - 1];
       const currentId = lastMsg ? lastMsg.id : null;
 
-      // GUARD: Only run logic if the LAST message ID actually changed.
-      // This prevents cursor movements (which change the array ref) from triggering scroll logic.
+      // 1. Conveyor Belt Logic (New messages at bottom)
       if (currentId !== lastSeenMessageId) {
           lastSeenMessageId = currentId;
           handleIncoming();
+      }
+
+      // 2. History Injection Logic (Messages added at top)
+      // Check if the cursor points to the SAME message ID, but the List changed/grew
+      if ($chatStore.cursorIndex !== -1) {
+          const currentCursorId = msgs[$chatStore.cursorIndex]?.id;
+          
+          // If we are DETACHED (viewing history) and the cursor ID matches the previous one...
+          // ...but the store updated (implying indices likely shifted), force a scroll adjustment.
+          if (!$chatStore.isAttached && currentCursorId && currentCursorId === previousCursorId) {
+              // Wait for DOM update, then re-snap to cursor
+              tick().then(() => scrollToCursor());
+          }
+          
+          previousCursorId = currentCursorId;
       }
   }
 </script>

@@ -97,13 +97,31 @@
     
     <div class="results">
         {#each results as res, i}
+            {@const unread = $chatStore.unread[res.obj.id]}
+            {@const isMention = unread?.hasMention}
+            {@const isUnread = unread?.count > 0}
+
             <div 
                 class="item" 
                 class:selected={i === selectedIndex}
                 on:click={() => { selectedIndex = i; selectChannel(); }}
             >
                 <span class="service">[{res.obj.service.name}]</span> 
-                <span class="hash">#</span> {res.obj.name}
+                <span class="hash">
+                    {#if isMention}
+                        !
+                    {:else if isUnread}
+                        •
+                    {:else}
+                        #
+                    {/if}
+                </span> 
+            
+                <span class="name">{res.obj.name}</span>
+
+                {#if isUnread}
+                    <span class="count">{unread.count}</span>
+                {/if}
             </div>
         {/each}
         
@@ -162,6 +180,7 @@
       cursor: pointer;
       border-left: 2px solid transparent;
       display: flex; align-items: center;
+      opacity: 0.7; /* Dim read channels slightly */
   }
 
   .service {
@@ -174,9 +193,39 @@
   
   .hash { color: var(--fg-accent); margin-right: 4px; }
 
-  .item.selected {
-      background-color: var(--cursor-bg);
-      color: var(--fg-primary);
+  .item.selected { opacity: 1; }
+  
+  /* Unread Items: Full opacity + Subtle Cue */
+  .item.unread { 
+      opacity: 1; 
+  }
+  .item.unread .hash {
+      color: var(--fuji-white); /* White dot for general unread */
+      font-weight: bold;
+  }
+  .item.unread .name {
+      color: var(--fuji-white);
+  }
+
+  /* Mention Items: Urgent Cue */
+  .item.mention .hash {
+      color: var(--samurai-red); /* Alert color */
+  }
+  .item.mention .name {
+      color: var(--ronin-yellow);
+  }
+
+  .count {
+      margin-left: auto;
+      font-size: 0.75rem;
+      color: var(--katana-gray);
+      background: var(--bg-secondary);
+      padding: 1px 6px;
+      border-radius: 4px;
+  }
+  
+  .item.selected .count {
+      background: var(--bg-primary); /* Invert on selection */
   }
   
   .item.selected .service { color: var(--fg-primary); }

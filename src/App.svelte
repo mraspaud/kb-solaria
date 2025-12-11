@@ -79,8 +79,17 @@
               messageListComponent.scrollToCursor();
               break;
           case 'JUMP_BOTTOM':
+              // 1. Reset the "Ack" memory. 
+              // This forces the next check to actually send the packet to the server.
+              lastAckedMsgId = null; 
+              
               chatStore.jumpToBottom();
-              messageListComponent.scrollToBottom();
+              
+              // 2. Force immediate check (don't wait for the reactive loop)
+              checkReadStatus(true); 
+              
+              // 3. Sync view
+              tick().then(() => messageListComponent.scrollToBottom({ instant: true }));
               break;
           case 'CENTER_VIEW':
               // We could add a specific method to MessageList for this, 
@@ -258,7 +267,11 @@
                   const realId = channel.id.startsWith('thread_') ? channel.parentChannel?.id : channel.id;
                   if (realId) {
                       sendMarkRead(realId, targetMsg.id, channel.service.id);
-                      chatStore.markReadUpTo(channel, targetMsg);
+                      const targetChannel = (channel.id.startsWith('thread_') && channel.parentChannel) 
+                                            ? channel.parentChannel 
+                                            : channel;
+
+                      chatStore.markReadUpTo(targetChannel, targetMsg);
                       lastAckedMsgId = targetMsg.id;
                   }
               }
@@ -324,7 +337,13 @@
                       maxReadIndex = finalMsgs.length - 1;
                   }
               } else {
-                  if (!isTargetedJump) chatStore.jumpToBottom();
+                  // All read
+                  if (!isTargetedJump) {
+                      chatStore.jumpToBottom();
+                      tick().then(() => messageListComponent.scrollToBottom({ instant: true }));
+                  }
+                  maxReadIndex = finalMsgs.length - 1;
+
               }
               
               justSwitchedChannel = false;
