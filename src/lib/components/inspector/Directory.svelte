@@ -22,6 +22,7 @@
     <div class="list">
         {#each list as item, i}
             <div class="item" class:active={i === activeIdx}>
+             
                 {#if state.match?.trigger === '@'}
                     <span class="icon" style="color: {getUserColor(item.obj.id)}">●</span>
                     <span class="name">{item.obj.name}</span>
@@ -35,8 +36,13 @@
                     <span class="meta">{item.obj.service.name}</span>
 
                 {:else if state.match?.trigger === ':'}
-                    <span class="emoji-icon">{item.obj}</span>
-                    <span class="name">:{item.obj}:</span>
+                    {#if item.obj.isCustom}
+                        <img src={item.obj.url} class="emoji-icon custom" alt={item.obj.id} />
+                    {:else}
+                        <span class="emoji-icon">{item.obj.char}</span>
+                    {/if}
+                    
+                    <span class="name">:{item.obj.id}:</span>
                 {/if}
             </div>
         {/each}
@@ -79,10 +85,10 @@
         /* Let's try visual bottom (closest to input) */
         flex-shrink: 0;
     }
-
     .item {
         padding: 6px 15px;
-        display: flex; align-items: center; gap: 10px;
+        display: flex; align-items: center;
+        gap: 10px;
         color: var(--katana-gray);
         border-left: 2px solid transparent;
         cursor: pointer;
@@ -95,5 +101,16 @@
     .name { font-weight: bold; }
     .meta { font-size: 0.8rem; opacity: 0.7; margin-left: auto; }
     .empty { padding: 20px; text-align: center; color: var(--sumi-ink-3); font-style: italic; }
-    .emoji-icon { font-size: 1.2em; min-width: 1.5em; text-align: center; }
+    
+    .emoji-icon { 
+        font-size: 1.2em; 
+        min-width: 1.5em; 
+        text-align: center;
+    }
+    /* New style for custom emoji images */
+    .emoji-icon.custom {
+        width: 1.5em;
+        height: 1.5em;
+        object-fit: contain;
+    }
 </style>

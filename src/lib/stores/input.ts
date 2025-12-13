@@ -1,8 +1,7 @@
-// src/lib/stores/input.ts
-
 import { writable, derived, get } from 'svelte/store';
 import { chatStore } from './chat';
 import { inspectorStore } from './inspector';
+import { allEmojis } from './emoji'; 
 import fuzzysort from 'fuzzysort';
 
 export type TriggerType = '@' | '#' | '~' | ':' | null;
@@ -20,19 +19,10 @@ interface InputState {
     selectedIndex: number;
 }
 
-const EMOJIS = ["thumbsup", "thumbsdown", "fire", "rocket", "eyes", "check_mark", "x", "tada", "joy", "heart", "sob", "thinking"];
-
 // 1. SCOPED USERS (Filtered by Service)
 export const users = derived(chatStore, $s => {
     const activeServiceId = $s.activeChannel.service.id;
-    const allUsers = Array.from($s.users.values());
-
-    if (activeServiceId === 'aggregation') {
-        return allUsers;
-    }
-
-    // Otherwise, strict scoping
-    return allUsers.filter(u => {
+    return Array.from($s.users.values()).filter(u => {
         return u.serviceId === activeServiceId || !u.serviceId; 
     });
 });
@@ -47,7 +37,6 @@ export const entityRegex = derived(
     ([$users, $chat]) => {
         const activeServiceId = $chat.activeChannel.service.id;
         
-        // Filter Channels by Service
         const channelNames = $chat.availableChannels
             .filter(c => c.service.id === activeServiceId)
             .map(c => c.name);
@@ -61,11 +50,10 @@ export const entityRegex = derived(
 
         const userGroup = userNames.map(escapeRegex).join('|');
         const chanGroup = channelNames.map(escapeRegex).join('|');
-        
+         
         let pattern = "";
         if (userGroup) pattern += `(@)(${userGroup})`;
         if (userGroup && chanGroup) pattern += "|";
-        // Match BOTH # and ~ for channels
         if (chanGroup) pattern += `([#~])(${chanGroup})`;
 
         return new RegExp(pattern, 'g');
@@ -75,13 +63,12 @@ export const entityRegex = derived(
 const initialState: InputState = { raw: "", cursorPos: 0, match: null, selectedIndex: 0 };
 const store = writable<InputState>(initialState);
 
-// 3. UPDATED TRIGGER DETECTION (Supports ~)
+// 3. UPDATED TRIGGER DETECTION
 function detectTrigger(text: string, cursor: number): MatchResult | null {
     const sub = text.slice(0, cursor);
-    // Allow ~ in the trigger group
+    // Added ':' to the regex character set
     const regex = /(^|\s)([@#:~])((?:[a-zA-Z0-9_\-\.]+(?: [a-zA-Z0-9_\-\.]+)*)?)$/;
     const found = sub.match(regex);
-
     if (found) {
         return {
             trigger: found[2] as TriggerType,
@@ -97,10 +84,10 @@ export const inputEngine = {
 
     update: (raw: string, cursorPos: number) => {
         let match = detectTrigger(raw, cursorPos);
-        
+
         // Semantic Guard (Service Aware)
         if (match && match.query.includes(' ')) {
-            const currentUsers = get(users); // Already filtered
+            const currentUsers = get(users);
             const activeServiceId = get(chatStore).activeChannel.service.id;
             const currentChannels = get(chatStore).availableChannels.filter(c => c.service.id === activeServiceId);
             
@@ -111,6 +98,11 @@ export const inputEngine = {
                 isValidPrefix = currentUsers.some(u => u.name.toLowerCase().startsWith(q));
             } else if (match.trigger === '#' || match.trigger === '~') {
                 isValidPrefix = currentChannels.some(c => c.name.toLowerCase().startsWith(q));
+            }
+            // Colon triggers (emojis) generally don't have spaces, 
+            // but if they do, we assume it's invalid unless your logic supports "thumbs up"
+            else if (match.trigger === ':') {
+                 isValidPrefix = false; 
             }
 
             if (!isValidPrefix) match = null;
@@ -147,24 +139,40 @@ export const inputEngine = {
 
         const target = list[s.selectedIndex];
         let replacement = "";
-        
+
         // SMART RESOLVE
         if (s.match.trigger === '#' || s.match.trigger === '~') {
-            // Try to get prefix from Identity, fallback to what user typed
             const identity = get(chatStore).currentUser;
             const prefix = identity?.channelPrefix || s.match.trigger;
             replacement = prefix + target.obj.name;
         }
-        else if (s.match.trigger === '@') replacement = "@" + target.obj.name; // Always enforce @
-        else if (s.match.trigger === ':') replacement = target.obj + ":";
+        else if (s.match.trigger === '@') {
+             replacement = "@" + target.obj.name;
+        }
+        else if (s.match.trigger === ':') {
+            // FIXED: Handle Object instead of String
+            const emoji = target.obj;
+            if (emoji.isCustom) {
+                // Custom emojis insert the shortcode + space
+                replacement = `:${emoji.id}: `; 
+            } else {
+                // Standard emojis insert the Unicode Character + space
+                replacement = `${emoji.char} `;
+            }
+        }
 
-        // Remove the original trigger + query
-        const pre = s.raw.slice(0, s.match.index); 
+        const pre = s.raw.slice(0, s.match.index);
         const post = s.raw.slice(s.cursorPos); 
         
-        const suffix = (s.match.trigger !== ':') ? " " : "";
-        const newText = pre + replacement + suffix + post;
-        const newCursorPos = pre.length + replacement.length + suffix.length;
+        const suffix = (s.match.trigger !== ':') ? " " : ""; 
+        // Note: We handled the space manually for emojis above to avoid double spaces if needed,
+        // but adding 'suffix' here effectively adds a second space for non-colon triggers.
+        // Let's keep existing behavior for @/# and use the manual logic for :.
+        
+        const finalSpace = (s.match.trigger === ':') ? "" : " ";
+
+        const newText = pre + replacement + finalSpace + post;
+        const newCursorPos = pre.length + replacement.length + finalSpace.length;
 
         store.set({ raw: newText, cursorPos: newCursorPos, match: null, selectedIndex: 0 });
         inspectorStore.setOverride(null);
@@ -174,31 +182,37 @@ export const inputEngine = {
     reset: () => store.set(initialState)
 };
 
-// 4. SCOPED CANDIDATES (Filtered by Service)
+// 4. CANDIDATES (Updated for Emoji Store)
 export const candidates = derived(
-    [store, chatStore, users], 
-    ([$s, $chat, $users]) => {
+    [store, chatStore, users, allEmojis], 
+    ([$s, $chat, $users, $emojis]) => {
         if (!$s.match) return [];
-        const q = $s.match.query;
+        const q = $s.match.query.toLowerCase();
         const activeServiceId = $chat.activeChannel.service.id;
 
         let source: any[] = [];
         let keys: string[] = [];
 
-        // Handle # AND ~ triggers
         if ($s.match.trigger === '#' || $s.match.trigger === '~') {
-            // Filter channels by active service
             source = $chat.availableChannels.filter(c => c.service.id === activeServiceId);
             keys = ['name'];
         } 
         else if ($s.match.trigger === '@') {
-            source = $users; // Already filtered by 'users' derived store
+            source = $users; 
             keys = ['name', 'id'];
         } 
         else if ($s.match.trigger === ':') {
-            source = EMOJIS;
-            if (!q) return source.map(e => ({ obj: e }));
-            return fuzzysort.go(q, source).map(res => ({ obj: res.target }));
+            // FIXED: Use the new Emoji store
+            source = $emojis;
+            
+            // Optimization: If query is empty, return top 20
+            if (!q) return source.slice(0, 20).map(e => ({ obj: e }));
+
+            return fuzzysort.go(q, source, { 
+                keys: ['id', 'keywords'], 
+                threshold: -10000,
+                limit: 15 // Limit results for performance
+            }).map(res => ({ obj: res.obj }));
         }
 
         if (!q) return source.map(x => ({ obj: x }));
@@ -216,7 +230,10 @@ export const ghostText = derived(
 
         if ($s.match.trigger === '#' || $s.match.trigger === '~') targetName = target.obj.name;
         else if ($s.match.trigger === '@') targetName = target.obj.name;
-        else if ($s.match.trigger === ':') targetName = target.obj;
+        else if ($s.match.trigger === ':') {
+            // FIXED: Access .id instead of the object itself
+            targetName = target.obj.id; 
+        }
 
         if (!targetName) return ""; 
         if (targetName.toLowerCase().startsWith(currentTyped.toLowerCase())) {
