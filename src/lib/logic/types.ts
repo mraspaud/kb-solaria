@@ -37,6 +37,8 @@ export interface Attachment {
 
 export interface Message {
     id: string;
+    clientId?: string;
+    status?: 'pending' | 'sent' | 'failed';
     author: UserIdentity;
     content: string;
     timestamp: Date;
@@ -46,6 +48,29 @@ export interface Message {
     bucket?: Bucket; 
     threadId?: string;
     sourceChannel?: ChannelIdentity;
+}
+
+export interface NormalizedState {
+    entities: {
+        messages: Map<string, Message>;
+    };
+
+    buffers: Map<string, string[]>;
+}
+
+export interface ChatState extends NormalizedState {
+    activeChannel: ChannelIdentity;
+    availableChannels: ChannelIdentity[];
+    // DEPRECATED: We are moving to 'entities.messages' and 'buffers'
+    messages: Message[]; 
+    cursorIndex: number;
+    isAttached: boolean;
+    unread: Record<string, UnreadState>;
+    identities: Record<string, UserIdentity>;
+    currentUser: UserIdentity | null;
+    users: Map<string, UserIdentity>;
+    participatedThreads: Set<string>;
+    virtualCounts: { triage: number; inbox: number; };
 }
 
 export interface UnreadState {

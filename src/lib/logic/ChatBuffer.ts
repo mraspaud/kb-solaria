@@ -1,22 +1,31 @@
-import type { Message } from './types';
-
 type Listener = () => void;
 
 export class ChatBuffer {
-    messages: Message[] = [];
+    messageIds: string[] = [];
     private listeners: Listener[] = [];
 
-    addMessage(msg: Message) {
-        const existingIndex = this.messages.findIndex(m => m.id === msg.id);
-
-        if (existingIndex !== -1) {
-            this.messages[existingIndex] = { ...this.messages[existingIndex], ...msg };
-        } else {
-            this.messages.push(msg);
- 
-            this.messages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    addMessageId(id: string) {
+        // Prevent duplicates (Set behavior)
+        if (!this.messageIds.includes(id)) {
+            this.messageIds.push(id);
         }
+        this.notify();
+    }
+    
+    prependMessageId(id: string) {
+        if (!this.messageIds.includes(id)) {
+            this.messageIds.unshift(id);
+        }
+        this.notify();
+    }
 
+    removeMessageId(id: string) {
+        this.messageIds = this.messageIds.filter(mid => mid !== id);
+        this.notify();
+    }
+    
+    clear() {
+        this.messageIds = [];
         this.notify();
     }
 

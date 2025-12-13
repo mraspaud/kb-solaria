@@ -128,6 +128,17 @@ service.onEvent((payload) => {
         // 4. INCOMING MESSAGES
         else if (payload.event === 'message') {
             const msgData = payload.message;
+
+            // CHECK: Is this an echo of my own message?
+            // We check if we have a matching 'client_id' OR if we have the 'id' already
+            if (msgData.clientId) {
+                // Perfect Scenario: Server echoed our ID
+                chatStore.handleAck(msgData.clientId, msgData.id, msgData.body);
+                return; // Stop processing, we just swapped it.
+            }
+            
+            // ... (rest of existing message dispatch logic) ...
+
             const serviceData = payload.service || { name: 'Unknown', id: 'unknown' };
             const threadId = payload.thread_id || msgData.thread_id;
             
@@ -190,7 +201,9 @@ service.onEvent((payload) => {
         else if (payload.event === 'message_delete') {
             chatStore.removeMessage(payload.message_id);
         }
-
+        else if (payload.event === 'message_ack') {
+             chatStore.handleAck(payload.client_id, payload.real_id, payload.text);
+        }
         // 6. THREAD SUBSCRIPTIONS
         else if (payload.event === 'thread_subscription_list') {
              const threadData = payload.thread_ids || []; 
@@ -304,23 +317,35 @@ export function sendMessage(text: string) {
     const state = get(chatStore);
     const meta = state.activeChannel;
     
-    let payload: any = {};
+    // 1. Generate Nonce
+    const tempId = crypto.randomUUID(); 
+    const now = new Date();
+
+    // 2. Optimistic Dispatch (Immediate UI update)
+    chatStore.dispatchMessage(meta, {
+        id: tempId,
+        clientId: tempId,
+        author: state.currentUser!, // Assert we have a user
+        content: text,
+        timestamp: now,
+        status: 'pending',
+        reactions: {}
+    });
+
+    // 3. Construct Payload
+    let payload: any = {
+        client_id: tempId, // <--- The Key
+        body: text,
+        service_id: meta.service.id,
+    };
 
     if (meta.id.startsWith('thread_')) {
-        payload = {
-            command: "post_reply",
-            service_id: meta?.service.id,
-            channel_id: meta.parentChannel?.id,
-            thread_id: meta?.threadId,
-            body: text
-        };
+        payload.command = "post_reply";
+        payload.channel_id = meta.parentChannel?.id;
+        payload.thread_id = meta.threadId;
     } else {
-        payload = {
-            command: "post_message",
-            service_id: meta?.service.id || 'unknown',
-            channel_id: meta?.id || 'general',
-            body: text
-        };
+        payload.command = "post_message";
+        payload.channel_id = meta.id;
     }
 
     service.send(payload);
@@ -415,3 +440,5 @@ export function sendTyping(channelId: string, serviceId: string) {
         channel_id: channelId
     });
 }
+
+

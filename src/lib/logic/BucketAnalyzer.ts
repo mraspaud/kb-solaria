@@ -1,3 +1,4 @@
+// src/lib/logic/BucketAnalyzer.ts
 import { type Message, type ChannelIdentity, type UserIdentity, Bucket } from './types';
 
 export class BucketAnalyzer {
@@ -6,40 +7,51 @@ export class BucketAnalyzer {
         msg: Message, 
         channel: ChannelIdentity, 
         me: UserIdentity | undefined, 
-        myThreads: Set<string>
+        myThreads: Set<string>,
+        threadReadAt?: number // <--- NEW PARAMETER
     ): Bucket {
 
-        // My own words are "Noise" to the Input Stream.
+        // 0. SELF GUARD
         if (me && msg.author.id === me.id) {
             return Bucket.NOISE;
         }
-        // --- 0. HISTORY GUARD (The Fix) ---
-        // If the channel has a known "Last Read" time, and this message is OLDER than that,
-        // it is history. We treat it as NOISE (archived), never EGO or SIGNAL.
-        if (channel.lastReadAt) {
-            // Convert to ms for comparison (msg.timestamp is Date)
-            const msgTime = msg.timestamp.getTime();
-            const readTime = channel.lastReadAt * 1000;
+
+        // 1. HISTORY GUARD (Dual-State Logic)
+        const msgTime = msg.timestamp.getTime();
+        
+        if (msg.threadId) {
+            // A. THREAD REPLY: Check Thread Cursor
+            // If we have a specific read time for this thread, use it.
+            // If not, we assume it's unread (0). 
+            // We do NOT fall back to channel.lastReadAt because reading the main channel 
+            // does not mean you opened the thread.
+            const threshold = (threadReadAt || 0) * 1000;
             
-            // Allow a small 2s buffer for clock skew/network lag
-            if (msgTime <= readTime + 2000) {
+            // Allow 2s buffer for clock skew
+            if (msgTime <= threshold + 2000) {
                 return Bucket.NOISE;
+            }
+        } else {
+            // B. ROOT MESSAGE: Check Channel Cursor
+            if (channel.lastReadAt) {
+                const threshold = channel.lastReadAt * 1000;
+                if (msgTime <= threshold + 2000) {
+                    return Bucket.NOISE;
+                }
             }
         }
 
-        // 1. EGO CHECK (Case-Insensitive)
+        // 2. EGO CHECK (Mention/DM)
         if (me) {
             const contentLower = msg.content.toLowerCase();
             const nameLower = me.name.toLowerCase();
-            const idMatch = me.id ? msg.content.includes(me.id) : false; // IDs are usually case-sensitive
-            
-            // Check for @Name or direct ID
-            if (contentLower.includes(`@${nameLower}`) || idMatch) {
+            // Simple robust check
+            if (contentLower.includes(`@${nameLower}`) || (me.id && msg.content.includes(me.id))) {
                 return Bucket.EGO;
             }
         }
 
-        // 2. CONTEXT CHECK
+        // 3. CONTEXT CHECK (My Threads)
         if (msg.threadId && myThreads.has(msg.threadId)) {
             return Bucket.CONTEXT;
         }
@@ -49,20 +61,23 @@ export class BucketAnalyzer {
             return Bucket.EGO;
         }
         
-        // 5. GROUP DM -> INBOX
+        // 5. GROUP DM -> SIGNAL (Inbox)
         if (channel.category === 'group') {
             return Bucket.SIGNAL;
         }
 
-        // 3. SIGNAL CHECK
-        if ((channel as any).starred) {
-            if (msg.threadId && !myThreads.has(msg.threadId)) {
+        // 6. SIGNAL CHECK (Starred)
+        if (channel.starred) {
+            // If it's a thread reply I'm NOT in, strictly it's Noise, 
+            // UNLESS I explicitly follow the thread (handled by myThreads above).
+            // But if it's a root message in a starred channel, it's Signal.
+            if (msg.threadId) {
                 return Bucket.NOISE;
             }
             return Bucket.SIGNAL;
         }
 
-        // 4. NOISE
+        // 7. NOISE
         return Bucket.NOISE;
     }
 }

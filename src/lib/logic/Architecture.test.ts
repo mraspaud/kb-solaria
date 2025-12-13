@@ -1,17 +1,9 @@
+// src/lib/logic/Architecture.test.ts
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ChatBuffer } from './ChatBuffer';
 import { ChatWindow } from './ChatWindow';
-import type { Message } from './types';
 
-const createMsg = (id: string): Message => ({ 
-    id, 
-    author: { id: 'me', name: 'Me', color: '#fff' }, 
-    content: 'txt', 
-    timestamp: new Date(),
-    reactions: {} 
-});
-
-describe('Chat Interaction Logic', () => {
+describe('Chat Logic (Normalized)', () => {
     let buffer: ChatBuffer;
     let window: ChatWindow;
 
@@ -26,16 +18,17 @@ describe('Chat Interaction Logic', () => {
     });
 
     it('auto-advances cursor when attached (Chat Mode)', () => {
-        buffer.addMessage(createMsg('1'));
+        // We push IDs directly now
+        buffer.addMessageId('m1');
         expect(window.cursorIndex).toBe(0);
 
-        buffer.addMessage(createMsg('2'));
+        buffer.addMessageId('m2');
         expect(window.cursorIndex).toBe(1);
     });
 
     it('detaches when moving up (Review Mode)', () => {
-        buffer.addMessage(createMsg('1'));
-        buffer.addMessage(createMsg('2'));
+        buffer.addMessageId('m1');
+        buffer.addMessageId('m2');
         
         window.moveCursor(-1);
         
@@ -44,18 +37,19 @@ describe('Chat Interaction Logic', () => {
     });
 
     it('stays put when new messages arrive if detached', () => {
-        buffer.addMessage(createMsg('1'));
-        buffer.addMessage(createMsg('2'));
-        window.moveCursor(-1); // At index 0
+        buffer.addMessageId('m1');
+        buffer.addMessageId('m2');
+        
+        window.moveCursor(-1); // At index 0 (m1)
 
-        buffer.addMessage(createMsg('3'));
+        buffer.addMessageId('m3');
 
-        expect(window.cursorIndex).toBe(0);
-        expect(buffer.messages.length).toBe(3);
+        expect(window.cursorIndex).toBe(0); // Should still point to m1
+        expect(buffer.messageIds.length).toBe(3);
     });
 
     it('re-attaches when jumping to bottom', () => {
-        buffer.addMessage(createMsg('1'));
+        buffer.addMessageId('m1');
         window.moveCursor(-1);
         
         window.jumpToBottom();
@@ -63,16 +57,18 @@ describe('Chat Interaction Logic', () => {
         expect(window.isAttached).toBe(true);
         expect(window.cursorIndex).toBe(0);
     });
-
-    it('re-attaches if user manually scrolls to the new bottom', () => {
-        buffer.addMessage(createMsg('1'));
-        buffer.addMessage(createMsg('2')); 
+    
+    it('handles sticky selection if messages shift (prepend)', () => {
+        // Simulate history load: [m2] -> [m1, m2]
+        buffer.addMessageId('m2');
+        window.jumpToBottom(); // Cursor at 0 (m2)
         
-        window.moveCursor(-1); 
+        window.detach(); // Detach to stick to m2
         
-        window.moveCursor(1);
-
+        buffer.prependMessageId('m1'); // Insert older message
+        
+        // Cursor should have shifted to 1 to follow "m2"
         expect(window.cursorIndex).toBe(1);
-        expect(window.isAttached).toBe(true);
+        expect(buffer.messageIds[window.cursorIndex]).toBe('m2');
     });
 });

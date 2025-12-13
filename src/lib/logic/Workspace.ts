@@ -1,6 +1,7 @@
+// src/lib/logic/Workspace.ts
 import { ChatBuffer } from './ChatBuffer';
 import { ChatWindow } from './ChatWindow';
-import type { ChannelIdentity, Message, ServiceIdentity } from './types';
+import type { ChannelIdentity } from './types';
 
 type Listener = () => void;
 
@@ -8,34 +9,27 @@ export class Workspace {
     private windows: Map<string, ChatWindow> = new Map();
     private meta: Map<string, ChannelIdentity> = new Map();
     private readonly MAX_HISTORY = 50;
-    
-    // STRICT: activeChannel is always an Object
+
+    // We still track the Active Channel Object for metadata purposes
     activeChannel: ChannelIdentity;
-    
-    // STRICT: Navigation stack holds Objects
     private navigationStack: ChannelIdentity[] = [];
     
     private listeners: Listener[] = [];
 
     constructor() {
-        // Create the System Identity Object
         const systemIdentity: ChannelIdentity = {
             id: 'system',
             name: 'System',
             service: { id: 'internal', name: 'Solaria' }
         };
-
-        // Bootstrap
         this.ensureChannelExists(systemIdentity);
         this.activeChannel = systemIdentity;
     }
 
-    // This method is the "Gateway" that ensures an Object is tracked
     private ensureChannelExists(identity: ChannelIdentity): boolean {
         let isNew = false;
         const { id } = identity;
 
-        // 1. Create Window infrastructure if missing
         if (!this.windows.has(id)) {
             const buffer = new ChatBuffer();
             const window = new ChatWindow(buffer);
@@ -43,18 +37,13 @@ export class Workspace {
             isNew = true;
         }
 
-        // 2. Update/Merge Metadata
         const existing = this.meta.get(id);
-        
         if (!existing) {
             this.meta.set(id, identity);
         } else {
-            // When merging, we prefer the NEW identity, but keep OLD context
-            // if the new one is "shallow" (e.g. created from a socket event)
             this.meta.set(id, {
                 ...existing,
-                ...identity, // Overwrite name/service updates
-                // Preserve structural context
+                ...identity,
                 parentChannel: identity.parentChannel || existing.parentChannel,
                 threadId: identity.threadId || existing.threadId,
                 parentMessage: identity.parentMessage || existing.parentMessage,
@@ -65,7 +54,6 @@ export class Workspace {
         return isNew;
     }
 
-    // STRICT: Only accepts Object. No strings allowed.
     openChannel(identity: ChannelIdentity) {
         if (!identity || !identity.id) {
             console.error("Workspace: Invalid identity passed to openChannel", identity);
@@ -73,55 +61,60 @@ export class Workspace {
         }
 
         const isNew = this.ensureChannelExists(identity);
-
-        // Update Active Channel
-        // We use ID comparison, but store the Object
         if (this.activeChannel.id !== identity.id) {
             this.activeChannel = identity;
             this.notify();
         }
     }
 
-    // --- THREADING ---
-    openThread(parentMsg: Message, parentChannel: ChannelIdentity) {
-        const threadInternalId = `thread_${parentMsg.id}`;
-        
-        // We need the service info from the parent
+    openThread(parentMsgId: string, parentChannel: ChannelIdentity, parentMsgObject: any) {
+        const threadInternalId = `thread_${parentMsgId}`;
         const service = parentChannel.service;
 
         this.navigationStack.push(this.activeChannel);
 
-        // Construct the Thread Identity Object
         const threadIdentity: ChannelIdentity = {
             id: threadInternalId,
             name: 'Thread',
             service: service,
             isThread: true,
-            parentChannel: parentChannel, // Pass the OBJECT
-            threadId: parentMsg.id,
-            parentMessage: parentMsg
+            parentChannel: parentChannel,
+            threadId: parentMsgId,
+            parentMessage: parentMsgObject // We still need this for the Banner, for now.
         };
 
-        // Reuse openChannel logic
         this.openChannel(threadIdentity);
+    }
+
+    reset() {
+        this.windows.clear();
+        this.meta.clear();
+        this.navigationStack = [];
+        // Re-bootstrap system
+        const systemIdentity: ChannelIdentity = {
+            id: 'system',
+            name: 'System',
+            service: { id: 'internal', name: 'Solaria' }
+        };
+        this.ensureChannelExists(systemIdentity);
+        this.activeChannel = systemIdentity;
     }
 
     goBack() {
         const prev = this.navigationStack.pop();
         if (prev) {
-            // We already have the object, so just switch
             this.activeChannel = prev;
             this.notify();
         }
     }
 
-    // --- MESSAGING ---
-    dispatchMessage(channel: ChannelIdentity, msg: Message) {
+    // CHANGED: Now takes an ID string, not a Message object
+    dispatchMessageId(channel: ChannelIdentity, msgId: string) {
         const isNew = this.ensureChannelExists(channel);
-        
-        // Use ID for internal map lookup only
         const window = this.windows.get(channel.id);
-        window?.buffer.addMessage(msg);
+        
+        // Push the ID
+        window?.buffer.addMessageId(msgId);
         
         if (isNew) this.notify();
     }
@@ -131,21 +124,21 @@ export class Workspace {
     }
     
     getActiveWindow(): ChatWindow { 
-        // Safe lookup using the ID from the object
-        return this.windows.get(this.activeChannel.id)!; 
+        return this.windows.get(this.activeChannel.id)!;
     }
 
     getActiveBuffer(): ChatBuffer { return this.getActiveWindow().buffer; }
-    getBuffer(id: string): ChatBuffer { return this.windows.get(id)?.buffer; }
+    
+    getBuffer(id: string): ChatBuffer | undefined { return this.windows.get(id)?.buffer; }
 
     getLastMessageId(channel: ChannelIdentity): string | undefined {
         const window = this.windows.get(channel.id);
         if (!window) return undefined;
         
-        const msgs = window.buffer.messages;
-        if (msgs.length === 0) return undefined;
+        const ids = window.buffer.messageIds;
+        if (ids.length === 0) return undefined;
         
-        return msgs[msgs.length - 1].id;
+        return ids[ids.length - 1];
     }
 
     subscribe(fn: Listener) {
@@ -156,15 +149,12 @@ export class Workspace {
     private notify() { this.listeners.forEach(fn => fn()); }
 
     pushToHistory(channel: ChannelIdentity) {
-        // Prevent duplicates at the top of the stack (optional, but clean)
         const top = this.navigationStack[this.navigationStack.length - 1];
         if (top && top.id === channel.id) return;
 
         this.navigationStack.push(channel);
-        
-        // The Cap: Maintain strictly 50 items
         if (this.navigationStack.length > this.MAX_HISTORY) {
-            this.navigationStack.shift(); // Remove the oldest
+            this.navigationStack.shift();
         }
     }
 }
