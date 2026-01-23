@@ -104,6 +104,16 @@
           return;
       }
 
+      const cmd = InputController.resolveKey(e, DEFAULT_KEYMAP);
+
+      // 3. Handle Insert Mode Commands
+      if (cmd === 'ATTACH_FILE') {
+          e.preventDefault(); // Stop browser "Find"
+          e.stopPropagation();
+          dispatch('attach');
+          return;
+      }
+
       // 3. NAVIGATION (Only if Match Active)
       if (state.match) {
           // Resolve the key using global config
@@ -137,13 +147,14 @@
 
         dispatch('submit', text);
 
-        // 3. Cleanup
+        // 3. Cleanup - clear both DOM and store state
         textarea.value = '';
         inputEngine.reset();
         autoResize();
-        
-        // 4. EXIT INSERT MODE
-        textarea.blur(); // <--- Triggers App.svelte's onBlur -> isInsertMode = false
+
+        // 4. EXIT INSERT MODE - wait for reactivity to settle, then blur
+        await tick();
+        textarea.blur();
       }
   }
   

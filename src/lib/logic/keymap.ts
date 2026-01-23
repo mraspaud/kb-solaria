@@ -23,13 +23,17 @@ export type Command =
   // Inspector / Files
   | 'OPEN_FILE'          // gf (Open attachment)
   | 'DOWNLOAD_FILE'      // gd (Save attachment)
+
+  // Context Navigation
+  | 'JUMP_TO_CONTEXT'    // gp (Jump to thread root in parent channel)
   
   // Modes & Toggles
   | 'QUICK_SWITCH'       // <Leader><Space>
   | 'TOGGLE_INSPECTOR'   // <Leader>e
   | 'TOGGLE_REACTION'   // <Leader>r
   | 'SELECT_NEXT' 
-  | 'SELECT_PREV';
+  | 'SELECT_PREV'
+  | 'ATTACH_FILE';
 
 export interface KeymapConfig {
     leader: string;
@@ -58,7 +62,6 @@ export const DEFAULT_KEYMAP: KeymapConfig = {
         '<C-k>': 'SELECT_PREV',
         '<C-p>': 'SELECT_PREV',
 
-        // ... (Rest remains unchanged) ...
         'Enter': 'ACTIVATE_SELECTION',
         'Backspace': 'GO_BACK',
         'Escape': 'CANCEL',
@@ -67,11 +70,13 @@ export const DEFAULT_KEYMAP: KeymapConfig = {
         'c c': 'START_EDIT',
         'd d': 'DELETE_MESSAGE',
         'y y': 'YANK_MESSAGE', 
-        'g x': 'OPEN_LINK',    
-        'g f': 'OPEN_FILE',     
-        'g d': 'DOWNLOAD_FILE', 
+        'g x': 'OPEN_LINK',
+        'g f': 'OPEN_FILE',
+        'g d': 'DOWNLOAD_FILE',
+        'g p': 'JUMP_TO_CONTEXT',
         '<Leader> <Leader>': 'QUICK_SWITCH',
         '<Leader> e': 'TOGGLE_INSPECTOR',
-        '<Leader> r': 'TOGGLE_REACTION'
+        '<Leader> r': 'TOGGLE_REACTION',
+        '<A-a>': 'ATTACH_FILE'
     }
 };

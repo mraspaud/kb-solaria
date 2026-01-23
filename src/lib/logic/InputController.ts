@@ -14,7 +14,10 @@ export class InputController {
         
         // Normalize Modifiers (Simple implementation matching instance logic)
         let inputKey = keyChar;
-        if (e.ctrlKey && keyChar !== 'Control') inputKey = `<C-${keyChar}>`;
+        if (keyChar !== 'Control' && keyChar !== 'Alt' && keyChar !== 'Shift') {
+            if (e.altKey) inputKey = `<A-${inputKey}>`;  // <--- NEW: Support Alt
+            if (e.ctrlKey) inputKey = `<C-${inputKey}>`; // Existing Ctrl support
+        }
         
         // Direct Lookup
         return config.bindings[inputKey] || null;
@@ -31,7 +34,10 @@ export class InputController {
 
         // 1. Normalize Modifiers
         let inputKey = keyChar;
-        if (e.ctrlKey && keyChar !== 'Control') inputKey = `<C-${keyChar}>`;
+        if (keyChar !== 'Control' && keyChar !== 'Alt' && keyChar !== 'Shift') {
+            if (e.altKey) inputKey = `<A-${inputKey}>`; // <--- NEW
+            if (e.ctrlKey) inputKey = `<C-${inputKey}>`;
+        }
         
         // 2. Resolve Sequence Logic
         const isSequence = (now - this.lastKeyTime) < this.config.leaderTimeout;

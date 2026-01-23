@@ -1,9 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { chatStore } from '../stores/chat';
+  import { sendMarkRead } from '../socketStore';
   import fuzzysort from 'fuzzysort';
 
   export let onClose: () => void;
+
+  // Services with per-message read granularity (mark as cursor moves)
+  // Others use channel-level read (mark all on entry, like Mattermost desktop)
+  const SERVICES_WITH_MESSAGE_GRANULARITY = new Set(['slack']);
+  const hasMessageGranularity = (serviceId: string): boolean =>
+    Array.from(SERVICES_WITH_MESSAGE_GRANULARITY).some(s => serviceId.startsWith(s));
 
   let inputEl: HTMLInputElement;
   let query = "";
@@ -73,10 +80,28 @@
   }
 
   function selectChannel() {
-    // Fuzzysort results are wrapped in { obj: ... }
     const target = results[selectedIndex];
-    if (target) {
-      chatStore.switchChannel(target.obj);
+    if (!target) return;
+
+    try {
+      const channel = target.obj;
+      chatStore.switchChannel(channel, 'unread');
+
+      // For services without per-message read granularity (like Mattermost),
+      // mark entire channel as read on entry
+      if (channel.service.id !== 'internal' &&
+          channel.service.id !== 'aggregation' &&
+          !hasMessageGranularity(channel.service.id)) {
+        const lastMsgId = chatStore.getLastMessageId(channel);
+        if (lastMsgId) {
+          sendMarkRead(channel.id, lastMsgId, channel.service.id);
+        }
+        chatStore.clearUnreadCount(channel.id);
+      }
+
+      onClose();
+    } catch (e) {
+      console.error('ChannelSwitcher error:', e);
       onClose();
     }
   }

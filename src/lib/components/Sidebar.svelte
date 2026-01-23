@@ -10,8 +10,9 @@
 
 <style>
   /* Copied from App.svelte */
-  .sidebar { 
-      width: 12px; 
+  .sidebar {
+      width: 12px;
+      flex-shrink: 0;
       background: var(--sumi-ink-0); 
       border-right: 1px solid var(--sumi-ink-2);
       display: flex; 

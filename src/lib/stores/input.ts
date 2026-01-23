@@ -19,6 +19,16 @@ interface InputState {
     selectedIndex: number;
 }
 
+export interface PendingAttachment {
+    clientId: string;
+    name: string;
+    status: 'uploading' | 'ready' | 'failed';
+    remoteId?: string; // The ID returned by the backend
+}
+
+export const attachments = writable<PendingAttachment[]>([]);
+
+
 // 1. SCOPED USERS (Filtered by Service)
 export const users = derived(chatStore, $s => {
     const activeServiceId = $s.activeChannel.service.id;

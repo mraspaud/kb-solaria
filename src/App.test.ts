@@ -16,6 +16,7 @@ vi.mock('./lib/socketStore', () => ({
     sendUpdate: vi.fn(),
     sendDelete: vi.fn(),
     fetchThread: vi.fn(),
+    fetchHistory: vi.fn(),
     sendOpenPath: vi.fn(),
     sendSaveToDownloads: vi.fn(),
     sendMarkRead: vi.fn(),
@@ -43,20 +44,26 @@ vi.mock('./lib/stores/chat', () => {
             subscribe: store.subscribe,
             set: store.set,
             update: store.update,
-            
+
             // Viewport Ops
             moveCursor: vi.fn(),
             jumpToBottom: vi.fn(),
             detach: vi.fn(),
-            
+            updateUnreadMarkerHighWater: vi.fn(),
+
             // Logic Ops
             markReadUpTo: vi.fn(),
             switchChannel: vi.fn(),
             openThread: vi.fn(),
             goBack: vi.fn(),
-            
+
+            // Unread Ops
+            clearUnreadMarker: vi.fn(),
+            clearUnreadCount: vi.fn(),
+
             // Helper Ops
             isMyMessage: vi.fn(() => true),
+            isChannelReadOnly: vi.fn(() => false),
         }
     };
 });
@@ -77,7 +84,9 @@ vi.mock('./lib/stores/input', () => ({
     inputEngine: { subscribe: (run: any) => { run({ raw: '', match: null }); return () => {}; } },
     users: { subscribe: (run: any) => { run([]); return () => {}; } },
     entityRegex: { subscribe: (run: any) => { run(null); return () => {}; } },
-    ghostText: { subscribe: (run: any) => { run(''); return () => {}; } }
+    ghostText: { subscribe: (run: any) => { run(''); return () => {}; } },
+    attachments: { subscribe: (run: any) => { run([]); return () => {}; } },
+    candidates: { subscribe: (run: any) => { run([]); return () => {}; } }
 }));
 
 
@@ -197,6 +206,6 @@ describe('App Component', () => {
         expect(chatStore.markReadUpTo).toHaveBeenCalledWith(inboxMsg.sourceChannel, inboxMsg);
         
         // 3. Verify Navigation
-        expect(chatStore.switchChannel).toHaveBeenCalledWith(inboxMsg.sourceChannel, 'm1');
+        expect(chatStore.switchChannel).toHaveBeenCalledWith(inboxMsg.sourceChannel, { jumpTo: 'm1' });
     });
 });

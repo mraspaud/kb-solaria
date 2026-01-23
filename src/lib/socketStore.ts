@@ -1,8 +1,8 @@
-// src/lib/socketStore.ts
 import { get } from 'svelte/store';
 import { chatStore } from './stores/chat';
 import { NetworkService } from './logic/NetworkService';
 import type { ChannelIdentity, UserIdentity, ServiceIdentity } from './logic/types';
+import { attachments, type PendingAttachment } from './stores/input';
 
 // 1. INITIALIZE SERVICE
 const NETWORK_URL = 'ws://127.0.0.1:4722/ws';
@@ -91,7 +91,7 @@ service.onEvent((payload) => {
 
                 // Ingest Unread State
                 if (c.unread || c.mentions > 0) {
-                    chatStore.updateUnreadState(c.id, c.unread ? 1 : 0, c.mentions > 0);
+                    chatStore.updateUnreadState(c.id, c.unread || 0, c.mentions > 0);
                 }
 
                 // Hydration Candidates (Morning Paper)
@@ -123,6 +123,15 @@ service.onEvent((payload) => {
                 serviceId: serviceId
             }));
             chatStore.upsertUsers(users);
+        }
+
+        else if (payload.event === 'staging_complete') {
+            attachments.update(all => all.map(f => {
+                if (f.clientId === payload.client_id) {
+                    return { ...f, status: 'ready', remoteId: payload.file_id };
+                }
+                return f;
+            }));
         }
 
         // 4. INCOMING MESSAGES
@@ -190,7 +199,8 @@ service.onEvent((payload) => {
                 timestamp: new Date(msgData.timestamp),
                 replyCount: msgData.replies?.count || 0,
                 reactions: msgData.reactions || {},
-                attachments: msgData.attachments || [] 
+                attachments: msgData.attachments || [],
+                threadId: threadId  // Include threadId so inbox purge can match thread replies
             });
         }
         
@@ -246,9 +256,16 @@ export function connect() {
 
 export function sendChannelSwitch(channel: ChannelIdentity) {
     if (channel.service.id === 'internal') return;
-    
-    // Determine 'After' ID for sync
-    const lastId = chatStore.getLastMessageId(channel);
+
+    // Determine 'After' ID for sync - but only use it if buffer has enough messages
+    // This prevents "empty channel" issues for old/inactive channels
+    const state = get(chatStore);
+    const bufferIds = state.buffers.get(channel.id);
+    const hasSubstantialBuffer = bufferIds && bufferIds.length >= 10;
+
+    // Only use 'after' for incremental sync if we have a substantial buffer
+    // Otherwise do a full fetch to ensure the channel is properly hydrated
+    const lastId = hasSubstantialBuffer ? chatStore.getLastMessageId(channel) : undefined;
 
     let payload: any;
 
@@ -258,17 +275,17 @@ export function sendChannelSwitch(channel: ChannelIdentity) {
             service_id: channel.service.id,
             channel_id: channel.parentChannel.id,
             thread_id: channel.threadId,
-            after: lastId 
+            after: lastId
         };
     } else {
         payload = {
             command: "switch_channel",
             service_id: channel.service.id,
-            channel_id: channel.id, 
-            after: lastId 
+            channel_id: channel.id,
+            after: lastId
         };
     }
-    
+
     service.send(payload);
     lastSyncedChannelId = channel.id;
 }
@@ -315,8 +332,17 @@ export function sendSaveToDownloads(path: string) {
 
 export function sendMessage(text: string) {
     const state = get(chatStore);
+    const currentAttachments = get(attachments);
     const meta = state.activeChannel;
-    
+   
+    if (currentAttachments.some(f => f.status === 'uploading')) {
+        console.warn("Wait for uploads to finish!");
+        return; // Or show UI feedback
+    }
+
+    const fileIds = currentAttachments.map(f => f.remoteId).filter(id => !!id);
+
+
     // 1. Generate Nonce
     const tempId = crypto.randomUUID(); 
     const now = new Date();
@@ -337,6 +363,7 @@ export function sendMessage(text: string) {
         client_id: tempId, // <--- The Key
         body: text,
         service_id: meta.service.id,
+        file_ids: fileIds
     };
 
     if (meta.id.startsWith('thread_')) {
@@ -349,6 +376,7 @@ export function sendMessage(text: string) {
     }
 
     service.send(payload);
+    attachments.set([]);
 }
 
 export function sendUpdate(id: string, newText: string) {
@@ -441,4 +469,38 @@ export function sendTyping(channelId: string, serviceId: string) {
     });
 }
 
+export async function stageFiles(fileList: FileList) {
+    const state = get(chatStore);
+    const meta = state.activeChannel;
+    
+    // Safety check: ensure we are logged in
+    if (!state.currentUser) return;
 
+    Array.from(fileList).forEach(file => {
+        const tempId = crypto.randomUUID();
+        const reader = new FileReader();
+
+        // A. Add to Staging Store
+        attachments.update(all => [...all, {
+            clientId: tempId,
+            name: file.name,
+            status: 'uploading'
+        }]);
+        reader.onload = () => {
+            const rawBase64 = reader.result as string;
+
+            // 2. Send Packet
+            service.send({
+                command: 'stage_file',
+                service_id: meta.service.id,
+                channel_id: meta.id.startsWith('thread_') ? meta.parentChannel?.id : meta.id,
+                thread_id: meta.threadId,
+                client_id: tempId,
+                filename: file.name,
+                mime: file.type,
+                data: rawBase64,
+            });
+        };
+        reader.readAsDataURL(file);
+    });
+}

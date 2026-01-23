@@ -5,8 +5,8 @@
 {#if $chatStore.activeChannel?.id?.startsWith('thread_')}
     <div class="thread-banner">
         <div class="thread-meta">
-            <span class="icon">⤴</span> 
-            <span class="title">Thread</span>
+            <span class="icon">⤴</span>
+            <span class="title">Thread {#if $chatStore.activeChannel.parentChannel}in #{$chatStore.activeChannel.parentChannel.name}{/if}</span>
             <span class="hint">[Backspace to return]</span>
         </div>
 

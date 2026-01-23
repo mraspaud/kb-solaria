@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { get } from 'svelte/store';
   import { chatStore } from '../stores/chat';
-  import { allEmojis, type Emoji } from '../stores/emoji';
+  import { allEmojis, normalizeEmojiKey, type Emoji } from '../stores/emoji';
   import { sendReaction } from '../socketStore';
   import fuzzysort from 'fuzzysort';
 
@@ -27,11 +27,12 @@
       reactionState.clear();
       if (message.reactions) {
           Object.entries(message.reactions).forEach(([key, users]) => {
-              // Key might be "🔥" or "custom_id"
+              // Normalize key to canonical emoji ID (handles Slack shortcodes like "+1")
+              const normalizedKey = normalizeEmojiKey(key);
               if (users.includes(me.id)) {
-                  reactionState.set(key, 'mine');
+                  reactionState.set(normalizedKey, 'mine');
               } else if (users.length > 0) {
-                  reactionState.set(key, 'others');
+                  reactionState.set(normalizedKey, 'others');
               }
           });
       }
@@ -44,10 +45,10 @@
 
   function getDisplayList(q: string, all: Emoji[], state: Map<string, string>) {
       // HELPER: Get status for a specific emoji object
+      // reactionState is now keyed by canonical emoji ID (via normalizeEmojiKey)
       const getStatus = (e: Emoji) => {
-          // Check Char (Standard) or ID (Custom)
-          if (e.isCustom) return state.get(e.id) || 'none';
-          return state.get(e.char!) || 'none';
+          // Just use the emoji's id - reactionState is already normalized to ids
+          return state.get(e.id) || 'none';
       };
 
       if (q) {
@@ -89,13 +90,14 @@
 
   // 3. ACTION HANDLER
   function select(emoji: Emoji) {
+      // For standard emojis: send unicode char so backend can convert to correct shortcode
+      // For custom emojis: send the id (shortcode)
       const key = emoji.isCustom ? emoji.id : emoji.char!;
-      
+
       // Toggle Logic
       let action: 'add' | 'remove' = 'add';
-      
-      // Check current state in our map
-      // (We can assume the map is up to date via reactivity)
+
+      // Check current state in our map (use 'key' not 'emoji.id')
       const currentStatus = reactionState.get(key);
       if (currentStatus === 'mine') {
           action = 'remove';
@@ -174,8 +176,7 @@
 
         <div class="grid" bind:this={container}>
             {#each displayList as emoji, i}
-                {@const key = emoji.isCustom ? emoji.id : emoji.char}
-                {@const status = reactionState.get(key)}
+                {@const status = reactionState.get(emoji.id)}
                 
                 <button 
                     id="reaction-{i}"

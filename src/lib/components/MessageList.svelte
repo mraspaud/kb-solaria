@@ -6,7 +6,7 @@
   import { getUserColor } from '../logic/theme';
   import Markdown from './Markdown.svelte';
 
-  export let unreadMarkerIndex = -1;
+  // unreadMarkerIndex is now read from the store
 
   let container: HTMLElement;
   let resizeObserver: ResizeObserver;
@@ -126,7 +126,7 @@
 
 <div class="message-list" bind:this={container} class:is-thread={$chatStore.activeChannel.id.startsWith('thread_')}>
     {#each $chatStore.messages as msg, index}
-       {@const isUnread = unreadMarkerIndex !== -1 && index > unreadMarkerIndex}
+       {@const isUnread = $chatStore.unreadMarkerIndex !== -1 && index > $chatStore.unreadMarkerIndex}
        {@const prevMsg = $chatStore.messages[index - 1]}
        {@const isNewDay = !prevMsg || prevMsg.timestamp.getDate() !== msg.timestamp.getDate()}
        
@@ -140,7 +140,7 @@
                 <div class="label">
                     {#if isNewContext && msg.sourceChannel}
                        <span class="context-tag">
-                            [{msg.sourceChannel.service.name}] #{msg.sourceChannel.name}
+                            [{msg.sourceChannel.service.name}] {#if msg.sourceChannel.isThread && msg.sourceChannel.parentChannel}#{msg.sourceChannel.parentChannel.name}/thread{:else}#{msg.sourceChannel.name}{/if}
                         </span>
                     {/if}
                     
@@ -203,13 +203,13 @@
 
 <style>
   /* Message List Styles from App.svelte */
-  .message-list { flex-grow: 1; overflow-y: auto; padding-top: 50px; display: flex; flex-direction: column; -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 50px, black 100%); mask-image: linear-gradient(to bottom, transparent 0%, black 50px, black 100%); }
+  .message-list { flex-grow: 1; overflow-y: auto; overflow-x: hidden; min-width: 0; padding-top: 50px; display: flex; flex-direction: column; -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 50px, black 100%); mask-image: linear-gradient(to bottom, transparent 0%, black 50px, black 100%); }
   .message-list.is-thread { background-color: #1a1a22; padding-top: 10px; -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 20px, black 100%); mask-image: linear-gradient(to bottom, transparent 0%, black 20px, black 100%); }
   .message-line { display: flex; padding: 1px 10px; border-left: 2px solid transparent; opacity: 0.7; transition: all 0.1s ease; }
   .message-line.active { background: var(--sumi-ink-2); border-left-color: var(--crystal-blue); opacity: 1; }
   .message-line.unread { border-left-color: var(--samurai-red); background: #25252f; }
   .line-content { display: flex; gap: 12px; align-items: baseline; width: 100%; }
-  .meta { min-width: 140px; text-align: right; font-size: 0.8rem; color: var(--katana-gray); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
+  .meta { width: 140px; flex-shrink: 0; text-align: right; font-size: 0.8rem; color: var(--katana-gray); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
   .author { font-weight: bold; }
   .text { flex-grow: 1; word-break: break-word; min-width: 0; line-height: 1.3; }
   .indicators { margin-left: auto; display: flex; align-items: center; gap: 5px; flex-shrink: 0; transform: translateY(1px); }

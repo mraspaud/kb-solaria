@@ -23,7 +23,16 @@ export class ChatBuffer {
         this.messageIds = this.messageIds.filter(mid => mid !== id);
         this.notify();
     }
-    
+
+    /**
+     * Replace messageIds array and notify listeners.
+     * Use this instead of direct assignment to ensure reactivity.
+     */
+    setMessageIds(ids: string[]) {
+        this.messageIds = ids;
+        this.notify();
+    }
+
     clear() {
         this.messageIds = [];
         this.notify();

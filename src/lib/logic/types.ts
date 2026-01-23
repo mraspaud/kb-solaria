@@ -62,9 +62,10 @@ export interface ChatState extends NormalizedState {
     activeChannel: ChannelIdentity;
     availableChannels: ChannelIdentity[];
     // DEPRECATED: We are moving to 'entities.messages' and 'buffers'
-    messages: Message[]; 
+    messages: Message[];
     cursorIndex: number;
     isAttached: boolean;
+    unreadMarkerIndex: number; // -1 = none, -2 = first msg is unread
     unread: Record<string, UnreadState>;
     identities: Record<string, UserIdentity>;
     currentUser: UserIdentity | null;

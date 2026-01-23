@@ -108,6 +108,14 @@ export class Workspace {
         }
     }
 
+    /**
+     * Pop from navigation stack without opening the channel
+     * Use this when you want to control the channel open separately
+     */
+    popFromHistory(): ChannelIdentity | undefined {
+        return this.navigationStack.pop();
+    }
+
     // CHANGED: Now takes an ID string, not a Message object
     dispatchMessageId(channel: ChannelIdentity, msgId: string) {
         const isNew = this.ensureChannelExists(channel);

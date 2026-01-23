@@ -191,7 +191,8 @@
               const seed = seededRandom(c.id);
               stars.set(c.id, {
                   id: c.id,
-                  name: c.name, 
+                  name: c.name + "/" + c.lastReadAt + "/" + c.lastPostAt, 
+                  // name: "wla",                
                   targetRadius: physics.radius,
                   currentRadius: 1.2, 
                   angle: seededRandom(c.id + '_ang') * Math.PI * 2,
