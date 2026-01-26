@@ -1,6 +1,7 @@
 // src/lib/logic/ChatWindow.ts
 import type { ChatBuffer } from './ChatBuffer';
 import type { Message } from './types';
+import { toMs } from '../utils/time';
 
 export type PendingCursorHint = 'unread' | 'bottom' | { jumpTo: string } | null;
 
@@ -83,7 +84,7 @@ export class ChatWindow {
             return;
         }
 
-        const threshold = lastReadAt * 1000; // Convert to ms
+        const threshold = toMs(lastReadAt);
         const firstUnreadIdx = this.buffer.messageIds.findIndex(id => {
             const msg = messages.get(id);
             return msg && msg.timestamp.getTime() > threshold;

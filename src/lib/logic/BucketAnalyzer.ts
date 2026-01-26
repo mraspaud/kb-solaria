@@ -1,5 +1,6 @@
 // src/lib/logic/BucketAnalyzer.ts
 import { type Message, type ChannelIdentity, type UserIdentity, Bucket } from './types';
+import { toMs } from '../utils/time';
 
 export class BucketAnalyzer {
     
@@ -25,7 +26,7 @@ export class BucketAnalyzer {
             // If not, we assume it's unread (0). 
             // We do NOT fall back to channel.lastReadAt because reading the main channel 
             // does not mean you opened the thread.
-            const threshold = (threadReadAt || 0) * 1000;
+            const threshold = toMs(threadReadAt);
             
             // Allow 2s buffer for clock skew
             if (msgTime <= threshold + 2000) {
@@ -34,7 +35,7 @@ export class BucketAnalyzer {
         } else {
             // B. ROOT MESSAGE: Check Channel Cursor
             if (channel.lastReadAt) {
-                const threshold = channel.lastReadAt * 1000;
+                const threshold = toMs(channel.lastReadAt);
                 if (msgTime <= threshold + 2000) {
                     return Bucket.NOISE;
                 }

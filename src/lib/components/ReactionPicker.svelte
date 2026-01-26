@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { get } from 'svelte/store';
   import { chatStore } from '../stores/chat';
-  import { allEmojis, normalizeEmojiKey, type Emoji } from '../stores/emoji';
+  import { allEmojis, type Emoji } from '../stores/emoji';
   import { sendReaction } from '../socketStore';
-  import fuzzysort from 'fuzzysort';
+  import {
+      buildReactionState, getDisplayList as getList, getReactionAction,
+      type ReactionStatus
+  } from '../logic/reactionAnalyzer';
 
   export let messageId: string;
   export let onClose: () => void;
@@ -14,95 +16,20 @@
   let selectedIndex = 0;
   let container: HTMLElement;
 
-  // 1. ANALYZE CURRENT REACTIONS
-  // We build a map to know the state of each emoji on THIS message.
-  // Map Key: The Emoji ID (for custom) or Char (for standard)
-  // Map Value: 'mine' | 'others' | 'none'
   $: message = $chatStore.messages.find(m => m.id === messageId);
   $: me = $chatStore.currentUser;
-  
-  $: reactionState = new Map<string, 'mine' | 'others' | 'none'>();
 
-  $: if (message && me) {
-      reactionState.clear();
-      if (message.reactions) {
-          Object.entries(message.reactions).forEach(([key, users]) => {
-              // Normalize key to canonical emoji ID (handles Slack shortcodes like "+1")
-              const normalizedKey = normalizeEmojiKey(key);
-              if (users.includes(me.id)) {
-                  reactionState.set(normalizedKey, 'mine');
-              } else if (users.length > 0) {
-                  reactionState.set(normalizedKey, 'others');
-              }
-          });
-      }
-  }
+  // Build reaction state map (emoji -> 'mine' | 'others' | 'none')
+  $: reactionState = message && me
+      ? buildReactionState(message.reactions, me.id)
+      : new Map<string, ReactionStatus>();
 
-  // 2. GENERATE DISPLAY LIST
-  // If Query: Fuzzy Search
-  // If No Query: Tiered Sort (Mine -> Others -> Popular -> Rest)
-  $: displayList = getDisplayList(query, $allEmojis, reactionState);
+  // Generate sorted/filtered display list
+  $: displayList = getList(query, $allEmojis, reactionState);
 
-  function getDisplayList(q: string, all: Emoji[], state: Map<string, string>) {
-      // HELPER: Get status for a specific emoji object
-      // reactionState is now keyed by canonical emoji ID (via normalizeEmojiKey)
-      const getStatus = (e: Emoji) => {
-          // Just use the emoji's id - reactionState is already normalized to ids
-          return state.get(e.id) || 'none';
-      };
-
-      if (q) {
-          // SEARCH MODE
-          // We search everything, but still favor 'mine' in the fuzzy score if we wanted (optional)
-          // For now, simple search is usually expected behavior.
-          return fuzzysort.go(q, all, { 
-              keys: ['id', 'keywords'],
-              limit: 50,
-              threshold: -10000 
-          }).map(res => res.obj);
-      } 
-      else {
-          // DEFAULT VIEW: TIERED SORT
-          // We copy the array to sort it without mutating the store
-          const sorted = [...all].sort((a, b) => {
-              const statA = getStatus(a);
-              const statB = getStatus(b);
-
-              const score = (s: string) => {
-                  if (s === 'mine') return 0;   // Priority 1
-                  if (s === 'others') return 1; // Priority 2
-                  return 2;                     // Priority 3 (Rest)
-              };
-
-              const scoreA = score(statA);
-              const scoreB = score(statB);
-
-              if (scoreA !== scoreB) return scoreA - scoreB;
-
-              // Tie-breaker: Use the store's native order (Custom -> Popular -> Standard)
-              return a.sortOrder - b.sortOrder;
-          });
-
-          // Optimization: Only show top 100 in default view to prevent DOM lag
-          return sorted.slice(0, 100);
-      }
-  }
-
-  // 3. ACTION HANDLER
   function select(emoji: Emoji) {
-      // For standard emojis: send unicode char so backend can convert to correct shortcode
-      // For custom emojis: send the id (shortcode)
       const key = emoji.isCustom ? emoji.id : emoji.char!;
-
-      // Toggle Logic
-      let action: 'add' | 'remove' = 'add';
-
-      // Check current state in our map (use 'key' not 'emoji.id')
-      const currentStatus = reactionState.get(key);
-      if (currentStatus === 'mine') {
-          action = 'remove';
-      }
-
+      const action = getReactionAction(key, reactionState);
       sendReaction(messageId, key, action);
       onClose();
   }

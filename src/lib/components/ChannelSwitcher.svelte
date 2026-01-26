@@ -2,15 +2,10 @@
   import { onMount } from 'svelte';
   import { chatStore } from '../stores/chat';
   import { sendMarkRead } from '../socketStore';
+  import { hasMessageGranularity } from '../utils/readGranularity';
   import fuzzysort from 'fuzzysort';
 
   export let onClose: () => void;
-
-  // Services with per-message read granularity (mark as cursor moves)
-  // Others use channel-level read (mark all on entry, like Mattermost desktop)
-  const SERVICES_WITH_MESSAGE_GRANULARITY = new Set(['slack']);
-  const hasMessageGranularity = (serviceId: string): boolean =>
-    Array.from(SERVICES_WITH_MESSAGE_GRANULARITY).some(s => serviceId.startsWith(s));
 
   let inputEl: HTMLInputElement;
   let query = "";

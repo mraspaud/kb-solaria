@@ -3,19 +3,24 @@
   import { chatStore } from '../../stores/chat';
   import { inputEngine } from '../../stores/input';
   import { getUserColor } from '../../logic/theme';
+  import { toMs } from '../../utils/time';
+  import {
+      type Star, type Dust,
+      calculateOrbit, sortStarsByPriority, initDust,
+      createStar, updateStarPhysics, updatePlanetPhysics, createPlanet
+  } from '../../logic/starPhysics';
 
   const CONFIG = {
-      SCALE_RATIO: 0.001, 
-      CORE_COLOR: '#DCD7BA', 
+      SCALE_RATIO: 0.001,
       RETICLE_IDLE: '#54546D',
-      RETICLE_ACTIVE: '#FF9E3B', 
+      RETICLE_ACTIVE: '#FF9E3B',
       PALETTE: ['#727169', '#54546D', '#7E9CD8', '#363646'],
-      
-      MAX_AGE_HOURS: 30 * 24, 
-      DEBUG_LABELS: true,
+      MAX_AGE_HOURS: 30 * 24,
       SPEED_MULTIPLIER: 1.0,
       FPS_LIMIT: 30,
   };
+
+  const orbitConfig = { maxAgeHours: CONFIG.MAX_AGE_HOURS, speedMultiplier: CONFIG.SPEED_MULTIPLIER };
 
   let canvas: HTMLCanvasElement;
   let ctx: CanvasRenderingContext2D;
@@ -30,101 +35,9 @@
   let wasTyping = false;
   let debugLabels = false;
 
-  interface Star {
-      id: string;
-      name: string;
-      targetRadius: number; 
-      currentRadius: number; 
-      angle: number;       
-      speed: number;
-      baseColor: string;
-      phase: number;       
-      activity: number; 
-      lastActivity: number;
-      mass: number;     
-      magnitude: number; 
-      planets: Planet[];
-  }
-
-  interface Planet {
-      id: string; 
-      name: string;
-      angle: number;
-      speed: number;
-      dist: number;
-      color: string;
-  }
-
-  interface Dust {
-      x: number;
-      y: number;
-      size: number;
-      alpha: number;
-  }
-
   let stars: Map<string, Star> = new Map();
   let dust: Dust[] = [];
-  let systemMaxMass = 1; 
-
-  function seededRandom(str: string) {
-      let h = 0x811c9dc5;
-      for (let i = 0; i < str.length; i++) {
-          h ^= str.charCodeAt(i);
-          h = Math.imul(h, 0x01000193);
-      }
-      return ((h >>> 0) / 4294967296);
-  }
-
-  // --- CONTINUOUS GRAVITY ---
-  // Replaces the "Zones" with a smooth slider from 0 to 1
-  function calculateOrbit(lastActiveMs: number, id: string): { radius: number, speed: number } {
-      const now = Date.now();
-      const diffHours = Math.max(0, (now - lastActiveMs) / (1000 * 60 * 60));
-      
-      // 1. Logarithmic Time (Fast initial dropoff)
-      // Useful for distinguishing "Now" from "1 hour ago"
-      const logRatio = Math.log(diffHours + 1) / Math.log(CONFIG.MAX_AGE_HOURS + 1);
-      
-      // 2. Linear Time (Slow steady dropoff)
-      // Useful for spreading out the "Days ago" stars
-      const linearRatio = Math.min(1.0, diffHours / CONFIG.MAX_AGE_HOURS);
-
-      // 3. Blend (The "Natural" Distribution)
-      // 30% Linear + 70% Log creates a dense center but fills the edges nicely
-      const combinedRatio = (linearRatio * 0.3) + (logRatio * 0.7);
-
-      // Map 0.0-1.0 to Screen Radius (0.15 to 0.95)
-      // We add a tiny seeded variance so two channels with exact same timestamps don't overlap
-      const jitter = (seededRandom(id + '_rad') - 0.5) * 0.05;
-      const radius = 0.15 + (combinedRatio * 0.8) + jitter;
-
-      // Keplerian Speed: Closer = Faster
-      const s = CONFIG.SPEED_MULTIPLIER;
-      const speed = (0.00005 * s) / Math.max(0.1, radius);
-
-      return { radius, speed };
-  }
-
-  function getSortedStars() {
-      return Array.from(stars.values()).sort((a, b) => {
-          const scoreA = (a.magnitude * 0.7) + (a.activity * 0.3);
-          const scoreB = (b.magnitude * 0.7) + (b.activity * 0.3);
-          return scoreA - scoreB; 
-      });
-  }
-
-  // Initialize Background Starfield
-  function initDust() {
-      dust = [];
-      for (let i = 0; i < 300; i++) {
-          dust.push({
-              x: Math.random(), // 0-1 normalized coords
-              y: Math.random(),
-              size: Math.random() * 1.5,
-              alpha: Math.random() * 0.15 + 0.05 // Very faint
-          });
-      }
-  }
+  let systemMaxMass = 1;
 
   function handleKeydown(e: KeyboardEvent) {
       if (e.key === 'F2') {
@@ -133,7 +46,7 @@
   }
 
   onMount(() => {
-      initDust();
+      dust = initDust(300);
       if (!canvas || !container) return;
       observer = new ResizeObserver((entries) => {
           for (const entry of entries) {
@@ -156,17 +69,17 @@
   });
 
   $: {
-      const channels = $chatStore.availableChannels; 
+      const channels = $chatStore.availableChannels;
       const activeId = $chatStore.activeChannel.id;
-      const unreadState = $chatStore.unread; 
+      const unreadState = $chatStore.unread;
       const currentMessages = $chatStore.messages;
-      const isTyping = $inputEngine.raw.length > 0; 
+      const isTyping = $inputEngine.raw.length > 0;
       const now = Date.now();
 
-      if (wasTyping && !isTyping) singularityPulse = 1.0; 
+      if (wasTyping && !isTyping) singularityPulse = 1.0;
       wasTyping = isTyping;
 
-      let maxMass = 0.001; 
+      let maxMass = 0.001;
       channels.forEach(c => {
           const m = c.mass || 0;
           if (m > maxMass) maxMass = m;
@@ -174,49 +87,31 @@
       systemMaxMass = maxMass;
 
       channels.forEach(c => {
-          let lastActive = (c.lastReadAt || 0) * 1000;
-          if (c.lastPostAt) lastActive = c.lastPostAt * 1000; 
-          if (lastActive > now + 86400000) {
-              lastActive = 0; 
-          }
-          const physics = calculateOrbit(lastActive, c.id);
-          
+          let lastActive = toMs(c.lastReadAt);
+          if (c.lastPostAt) lastActive = toMs(c.lastPostAt);
+          if (lastActive > now + 86400000) lastActive = 0;
+
+          const physics = calculateOrbit(lastActive, c.id, orbitConfig);
           const rawMass = c.mass || 0.0;
-          const ratio = rawMass / systemMaxMass;
-          
-          // USER TWEAK: Power 0.15 for better brightness balance
-          const magnitude = Math.pow(ratio, 0.15); 
+          const magnitude = Math.pow(rawMass / systemMaxMass, 0.15);
 
           if (!stars.has(c.id)) {
-              const seed = seededRandom(c.id);
-              stars.set(c.id, {
-                  id: c.id,
-                  name: c.name + "/" + c.lastReadAt + "/" + c.lastPostAt, 
-                  // name: "wla",                
-                  targetRadius: physics.radius,
-                  currentRadius: 1.2, 
-                  angle: seededRandom(c.id + '_ang') * Math.PI * 2,
-                  speed: physics.speed * (seededRandom(c.id+'dir') > 0.5 ? 1 : -1),
-                  baseColor: CONFIG.PALETTE[Math.floor(seed * CONFIG.PALETTE.length)],
-                  phase: Math.random() * Math.PI * 2,
-                  activity: 0,
-                  lastActivity: lastActive,
-                  mass: rawMass,
-                  magnitude: magnitude, 
-                  planets: []
-              });
+              const star = createStar(c.id, c.name, physics, CONFIG.PALETTE);
+              star.lastActivity = lastActive;
+              star.mass = rawMass;
+              star.magnitude = magnitude;
+              stars.set(c.id, star);
           } else {
               const s = stars.get(c.id)!;
               s.name = c.name;
               s.targetRadius = physics.radius;
-              s.magnitude = magnitude; 
+              s.magnitude = magnitude;
               s.mass = rawMass;
-              
+
               if (Math.abs(s.speed) !== physics.speed) {
-                  const dir = s.speed > 0 ? 1 : -1;
-                  s.speed = physics.speed * dir;
+                  s.speed = physics.speed * (s.speed > 0 ? 1 : -1);
               }
-              
+
               const u = unreadState[c.id];
               if (u?.hasMention) s.activity = 1.0;
               else if (u?.count > 0) s.activity = Math.min(0.8, 0.2 + (u.count * 0.05));
@@ -228,22 +123,16 @@
       if (activeStar) {
           const recentAuthors = new Set<string>();
           for (let i = currentMessages.length - 1; i >= 0 && i > currentMessages.length - 30; i--) {
-               recentAuthors.add(currentMessages[i].author.id);
+              recentAuthors.add(currentMessages[i].author.id);
           }
           activeStar.planets = activeStar.planets.filter(p => recentAuthors.has(p.id));
           const allUsers = $chatStore.users;
           recentAuthors.forEach(authorId => {
               if (!activeStar.planets.find(p => p.id === authorId)) {
-                  const seed = seededRandom(authorId); 
                   const userObj = allUsers.get(authorId);
-                  activeStar.planets.push({
-                      id: authorId,
-                      name: userObj?.name || 'Unknown', 
-                      angle: Math.random() * Math.PI * 2,
-                      speed: (0.004 + (seed * 0.006)) * CONFIG.SPEED_MULTIPLIER,
-                      dist: 1 + (seed * 1.5),
-                      color: getUserColor(authorId) 
-                  });
+                  activeStar.planets.push(
+                      createPlanet(authorId, userObj?.name || 'Unknown', getUserColor(authorId), CONFIG.SPEED_MULTIPLIER)
+                  );
               }
           });
       }
@@ -307,12 +196,10 @@
       ctx.stroke();
 
       // 4. RENDER STARS
-      const sortedStars = getSortedStars();
-      
+      const sortedStars = sortStarsByPriority(stars);
+
       for (const star of sortedStars) {
-          star.angle += star.speed; 
-          if (star.activity < 0.01) star.activity = 0;
-          star.currentRadius += (star.targetRadius - star.currentRadius) * 0.05;
+          updateStarPhysics(star);
 
           const x = cx + Math.cos(star.angle) * (star.currentRadius * maxR);
           const y = cy + Math.sin(star.angle) * (star.currentRadius * maxR);
@@ -354,15 +241,15 @@
           // PLANETS
           if (star.planets.length > 0) {
               star.planets.forEach(p => {
-                  p.angle += p.speed;
-                  const orbitalDistance = p.dist * (baseSize * 1.0 + 4); 
+                  updatePlanetPhysics(p);
+                  const orbitalDistance = p.dist * (baseSize * 1.0 + 4);
                   const px = x + Math.cos(p.angle) * orbitalDistance;
                   const py = y + Math.sin(p.angle) * orbitalDistance;
-                  
+
                   ctx.fillStyle = p.color;
                   ctx.globalAlpha = 0.9;
                   ctx.beginPath();
-                  ctx.arc(px, py, 1.5, 0, Math.PI * 2); 
+                  ctx.arc(px, py, 1.5, 0, Math.PI * 2);
                   ctx.fill();
               });
           }

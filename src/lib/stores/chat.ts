@@ -4,11 +4,20 @@ import { Workspace } from '../logic/Workspace';
 import { BucketAnalyzer } from '../logic/BucketAnalyzer';
 import { ChatWindow } from '../logic/ChatWindow';
 import { type ChannelIdentity, type Message, type UnreadState, type UserIdentity, Bucket, type ChatState } from '../logic/types';
-import { normalizeEmojiKey } from './emoji';
+import {
+    type CursorHint,
+    positionCursor as applyCursorPosition
+} from './cursorPositioning';
+import { applyReaction } from './reactionHandler';
+import {
+    buildUpdatedUnread,
+    mergeUnreadState,
+    clearUnread
+} from './unreadManager';
+import { applyAck, swapBufferIds } from './ackHandler';
 
-// Cursor hint for switchChannel - replaces NavigationController
-export type CursorHint = 'unread' | 'bottom' | { jumpTo: string };
-// undefined = preserve existing cursor position (like going back)
+// Re-export CursorHint for external use
+export { type CursorHint } from './cursorPositioning';
 
 function createChatStore() {
     const workspace = new Workspace();
@@ -118,6 +127,12 @@ function createChatStore() {
         });
     };
 
+    /** Helper to update store and sync state in one call */
+    const updateAndSync = (updateFn: (s: ChatState) => ChatState) => {
+        store.update(updateFn);
+        syncState();
+    };
+
     workspace.subscribe(() => {
         setupActiveBufferListener();
         syncState();
@@ -146,9 +161,6 @@ function createChatStore() {
         const fresh = state.availableChannels.find(c => c.id === channel.id);
         return fresh ? { ...channel, ...fresh } : channel;
     };
-
-    const getUnreadState = (state: ChatState, channelId: string): UnreadState =>
-        state.unread[channelId] || { count: 0, hasMention: false };
 
     /**
      * Check if incoming message is an echo of a pending message we sent.
@@ -203,163 +215,11 @@ function createChatStore() {
         return updated;
     };
 
-    /**
-     * Build updated unread state for a new message.
-     */
-    const buildUpdatedUnread = (
-        state: ChatState,
-        channel: ChannelIdentity,
-        isMe: boolean,
-        verdict: Bucket
-    ): Record<string, UnreadState> => {
-        if (channel.id === state.activeChannel.id || isMe || verdict === Bucket.NOISE) {
-            return state.unread;
-        }
-        const current = getUnreadState(state, channel.id);
-        return {
-            ...state.unread,
-            [channel.id]: {
-                count: current.count + 1,
-                hasMention: current.hasMention || verdict === Bucket.EGO
-            }
-        };
-    };
+    // --- CURSOR POSITIONING ---
 
     /**
-     * Find the index of the first unread message based on lastReadAt
-     * Falls back to unread count if lastReadAt is not available
-     */
-    const findFirstUnreadIndex = (channel: ChannelIdentity, state: ChatState): number => {
-        const buf = workspace.getBuffer(channel.id);
-        if (!buf || buf.messageIds.length === 0) {
-            return -1;
-        }
-
-        // Primary: Use lastReadAt timestamp if available
-        if (channel.lastReadAt) {
-            const threshold = channel.lastReadAt * 1000; // Convert to ms
-            const idx = buf.messageIds.findIndex(id => {
-                const msg = state.entities.messages.get(id);
-                return msg && msg.timestamp.getTime() > threshold;
-            });
-            return idx;
-        }
-
-        // Fallback: Use unread count if available (for services without lastReadAt)
-        const unreadInfo = state.unread[channel.id];
-        if (unreadInfo && unreadInfo.count > 0) {
-            // Position at (length - unreadCount) to show unreadCount messages as unread
-            const firstUnreadIdx = buf.messageIds.length - unreadInfo.count;
-            return Math.max(0, firstUnreadIdx);
-        }
-
-        // No lastReadAt and no unread count - assume all read
-        return -1;
-    };
-
-    // --- CURSOR POSITIONING STRATEGIES ---
-
-    type JumpToHint = { jumpTo: string };
-    type CursorWindow = ReturnType<typeof workspace.getActiveWindow>;
-    type CursorBuffer = ReturnType<typeof workspace.getActiveBuffer>;
-
-    /**
-     * Apply jumpTo hint - position cursor at specific message.
-     */
-    const applyJumpToHint = (
-        win: CursorWindow,
-        buf: CursorBuffer,
-        hint: JumpToHint,
-        channel: ChannelIdentity,
-        state: ChatState
-    ): void => {
-        const idx = buf.messageIds.indexOf(hint.jumpTo);
-        if (idx !== -1) {
-            win.cursorIndex = idx;
-            win.isAttached = false;
-            win.updateUnreadMarker(channel.lastReadAt, state.entities.messages);
-            win.pendingCursorHint = null;
-            win.hasBeenVisited = true;
-        } else if (buf.messageIds.length < 5) {
-            // Buffer sparse - store pending hint for when history arrives
-            win.pendingCursorHint = hint;
-            win.isAttached = false;
-            win.cursorIndex = Math.max(0, buf.messageIds.length - 1);
-        } else {
-            // Message not found in populated buffer - go to bottom
-            win.cursorIndex = buf.messageIds.length - 1;
-            win.isAttached = true;
-            win.updateUnreadMarker(channel.lastReadAt, state.entities.messages);
-            win.pendingCursorHint = null;
-            win.hasBeenVisited = true;
-        }
-    };
-
-    /**
-     * Apply unread hint - position at first unread message.
-     */
-    const applyUnreadHint = (
-        win: CursorWindow,
-        buf: CursorBuffer,
-        channel: ChannelIdentity,
-        state: ChatState
-    ): void => {
-        if (buf.messageIds.length === 0) {
-            win.pendingCursorHint = 'unread';
-            win.isAttached = false;
-            win.cursorIndex = -1;
-            return;
-        }
-
-        const firstUnread = findFirstUnreadIndex(channel, state);
-        const actualUnreadCount = firstUnread >= 0 ? buf.messageIds.length - firstUnread : 0;
-
-        if (firstUnread > 0) {
-            win.cursorIndex = firstUnread - 1;
-            win.isAttached = false;
-            if (channel.lastReadAt) {
-                win.updateUnreadMarker(channel.lastReadAt, state.entities.messages);
-            } else {
-                win.unreadMarkerIndex = firstUnread - 1;
-            }
-        } else if (firstUnread === 0) {
-            win.cursorIndex = 0;
-            win.isAttached = false;
-            win.unreadMarkerIndex = -2;
-        } else {
-            win.cursorIndex = Math.max(0, buf.messageIds.length - 1);
-            win.isAttached = true;
-            win.unreadMarkerIndex = -1;
-        }
-
-        // Sync stored unread count with actual
-        store.update(s => {
-            const current = s.unread[channel.id];
-            if (current && current.count !== actualUnreadCount) {
-                return {
-                    ...s,
-                    unread: { ...s.unread, [channel.id]: { ...current, count: actualUnreadCount } }
-                };
-            }
-            return s;
-        });
-
-        win.pendingCursorHint = null;
-        win.hasBeenVisited = true;
-    };
-
-    /**
-     * Apply bottom hint - position at end of buffer.
-     */
-    const applyBottomHint = (win: CursorWindow, buf: CursorBuffer): void => {
-        win.cursorIndex = Math.max(0, buf.messageIds.length - 1);
-        win.isAttached = true;
-        win.clearUnreadMarker();
-        win.hasBeenVisited = true;
-    };
-
-    /**
-     * Position cursor based on hint. Explicit hints always honored.
+     * Position cursor based on hint. Wraps the extracted cursorPositioning module
+     * and handles the store update for unread count sync.
      */
     const positionCursor = (channel: ChannelIdentity, cursorHint: CursorHint | undefined, state: ChatState): void => {
         const win = workspace.getActiveWindow();
@@ -367,19 +227,27 @@ function createChatStore() {
 
         if (!win || !buf) return;
 
-        if (cursorHint && typeof cursorHint === 'object' && 'jumpTo' in cursorHint) {
-            applyJumpToHint(win, buf, cursorHint, channel, state);
-            return;
-        }
-        if (cursorHint === 'unread') {
-            applyUnreadHint(win, buf, channel, state);
-            return;
-        }
-        if (win.hasBeenVisited) return;
-        if (cursorHint === 'bottom') {
-            applyBottomHint(win, buf);
-        } else {
-            win.hasBeenVisited = true;
+        const result = applyCursorPosition(
+            win,
+            buf,
+            channel,
+            cursorHint,
+            state.entities.messages,
+            state.unread[channel.id]
+        );
+
+        // If unread hint was applied and recalculated the count, sync with store
+        if (result.actualUnreadCount !== undefined) {
+            store.update(s => {
+                const current = s.unread[channel.id];
+                if (current && current.count !== result.actualUnreadCount) {
+                    return {
+                        ...s,
+                        unread: { ...s.unread, [channel.id]: { ...current, count: result.actualUnreadCount } }
+                    };
+                }
+                return s;
+            });
         }
     };
 
@@ -462,61 +330,21 @@ function createChatStore() {
                 return updateVirtualCounts({
                     ...s,
                     availableChannels: buildUpdatedChannels(s.availableChannels, channel, timestamp),
-                    unread: buildUpdatedUnread(s, channel, isMe, verdict)
+                    unread: buildUpdatedUnread(s.unread, s.activeChannel.id, channel, isMe, verdict)
                 });
             });
         },
 
         handleReaction: (channelId: string, msgId: string, emoji: string, userId: string, action: 'add' | 'remove') => {
-             store.update(s => {
-                 const msg = s.entities.messages.get(msgId);
-                 if (!msg) return s;
-
-                 // Normalize emoji key to handle different formats:
-                 // - Unicode chars: "👍"
-                 // - Slack shortcodes: "+1", "thumbsup"
-                 // - Standard shortcodes: "thumbs_up"
-                 const normalizedEmoji = normalizeEmojiKey(emoji);
-
-                 // Find existing reaction that normalizes to the same key
-                 const currentReactions = msg.reactions || {};
-                 const existingKey = Object.keys(currentReactions).find(
-                     k => normalizeEmojiKey(k) === normalizedEmoji
-                 );
-                 const reactionKey = existingKey || emoji;
-
-                 let users = [...(currentReactions[reactionKey] || [])];
-
-                 if (action === 'add') {
-                     if (!users.includes(userId)) users.push(userId);
-                 } else {
-                     users = users.filter(u => u !== userId);
-                 }
-
-                 // Build new reactions object
-                 const newReactions = { ...currentReactions };
-                 if (users.length > 0) {
-                     newReactions[reactionKey] = users;
-                 } else {
-                     delete newReactions[reactionKey];
-                 }
-
-                 // Create new message object for reactivity
-                 const updatedMsg = { ...msg, reactions: newReactions };
-
-                 // Create new Map for reactivity
-                 const newMessages = new Map(s.entities.messages);
-                 newMessages.set(msgId, updatedMsg);
-
-                 return {
-                     ...s,
-                     entities: {
-                         ...s.entities,
-                         messages: newMessages
-                     }
-                 };
-             });
-             syncState();
+            store.update(s => {
+                const result = applyReaction(s, msgId, emoji, userId, action);
+                if (!result) return s;
+                return {
+                    ...s,
+                    entities: { ...s.entities, messages: result.updatedMessages }
+                };
+            });
+            syncState();
         },
 
         moveCursor: (delta: number) => {
@@ -649,81 +477,29 @@ function createChatStore() {
         },
 
         handleAck: (tempId: string, realId: string, serverContent?: string) => {
+            let needsBufferSwap = false;
+
             store.update(s => {
-                const db = s.entities.messages;
-
-                // PATH A: Identity Match (Rocket.Chat)
-                // The ID is already correct. We just need to confirm it.
-                if (tempId === realId) {
-                    const msg = db.get(tempId);
-                    if (msg) {
-                        // Mutate in place to avoid flickering (same object reference)
-                        msg.status = 'sent';
-                        if (serverContent) msg.content = serverContent;
-                    }
-                    return s;
-                }
-
-                // PATH B: Identity Swap (Slack/Mattermost)
-                // The ID changed. We must re-key the record while keeping the same object.
-                const pendingMsg = db.get(tempId);
-                if (!pendingMsg) return s;
-
-                const existingReal = db.get(realId);
-                if (existingReal) {
-                    // Merge: The Real message arrived via WS before this Ack.
-                    // Update the existing real message in place and remove the temp.
-                    existingReal.status = 'sent';
-                    existingReal.clientId = tempId;
-                    db.delete(tempId);
-                } else {
-                    // Swap: Mutate the pending message in place and re-key it.
-                    // This preserves the object reference to avoid UI flickering.
-                    pendingMsg.id = realId;
-                    pendingMsg.clientId = tempId;
-                    pendingMsg.status = 'sent';
-                    if (serverContent) pendingMsg.content = serverContent;
-
-                    // Re-key: remove old key, add same object at new key
-                    db.delete(tempId);
-                    db.set(realId, pendingMsg);
-                }
+                const result = applyAck(s.entities.messages, tempId, realId, serverContent);
+                needsBufferSwap = result.needsBufferSwap;
                 return s;
             });
 
-            // 2. WORKSPACE BUFFER UPDATE
-            // If we took Path A (IDs match), the buffers are already correct. 
-            // We just updated the DB status above. STOP HERE.
-            if (tempId === realId) {
+            // If IDs matched (Path A), buffers are already correct
+            if (!needsBufferSwap) {
                 syncState();
                 return;
             }
 
-            // Path B: Fix Buffer References
+            // Path B: Fix buffer references
             const state = get(store);
-            
-            const updateBuffer = (buf: any) => {
-                if (!buf) return;
-                const ids = buf.messageIds;
-                const tempIdx = ids.indexOf(tempId);
-                const realIdx = ids.indexOf(realId);
-
-                if (tempIdx !== -1) {
-                    if (realIdx !== -1) {
-                        // Duplicate detected (Both exist): Remove Temp, keep Real
-                        ids.splice(tempIdx, 1);
-                    } else {
-                        // Normal Swap: Only Temp exists
-                        ids[tempIdx] = realId;
-                    }
-                }
-            };
-
             for (const chan of state.availableChannels) {
-                updateBuffer(workspace.getBuffer(chan.id));
+                const buf = workspace.getBuffer(chan.id);
+                if (buf) swapBufferIds(buf.messageIds, tempId, realId);
             }
             ['triage', 'inbox'].forEach(vid => {
-                 updateBuffer(workspace.getBuffer(vid));
+                const buf = workspace.getBuffer(vid);
+                if (buf) swapBufferIds(buf.messageIds, tempId, realId);
             });
 
             syncState();
@@ -768,19 +544,10 @@ function createChatStore() {
         },
 
         updateUnreadState: (channelId: string, count: number, hasMention: boolean) => {
-             store.update(s => {
-                const current = getUnreadState(s, channelId);
-                return {
-                    ...s,
-                    unread: {
-                        ...s.unread,
-                        [channelId]: {
-                            count: Math.max(current.count, count),
-                            hasMention: current.hasMention || hasMention
-                        }
-                    }
-                };
-            });
+            store.update(s => ({
+                ...s,
+                unread: mergeUnreadState(s.unread, channelId, count, hasMention)
+            }));
         },
 
         markReadUpTo: (channel: ChannelIdentity, message: Message | null) => {
@@ -911,11 +678,7 @@ function createChatStore() {
          * This only clears the count in the sidebar/switcher, NOT the visual marker
          */
         clearUnreadCount: (channelId: string) => {
-            store.update(s => {
-                const newUnread = { ...s.unread };
-                delete newUnread[channelId];
-                return { ...s, unread: newUnread };
-            });
+            store.update(s => ({ ...s, unread: clearUnread(s.unread, channelId) }));
         }
     };
 }

@@ -8,6 +8,9 @@
   } from './lib/socketStore';
   import { chatStore, type CursorHint } from './lib/stores/chat';
   import { inspectorStore } from './lib/stores/inspector';
+  import { focusStore } from './lib/stores/focus';
+  import { editorStore } from './lib/stores/editor';
+  import { readStatusStore } from './lib/stores/readStatus';
   import { InputController } from './lib/logic/InputController';
   import { DEFAULT_KEYMAP, type Command } from './lib/logic/keymap';
   import { extractUrls } from './lib/utils/messageUtils';
@@ -29,14 +32,13 @@
   let messageListComponent: MessageList;
   let statusLineComponent: StatusLine;
 
-  let isInsertMode = false;
-  let isWindowFocused = true;
-  let editingMessageId: string | null = null;
   let showChannelSwitcher = false;
   let showReactionPicker = false;
-  let markReadTimer: number | undefined;
-  let lastAckedMsgId: string | null = null;
-  let lastChannelId: string = "";
+
+  // Subscribe to stores
+  $: isInsertMode = $focusStore.isInsertMode;
+  $: isWindowFocused = $focusStore.isWindowFocused;
+  $: editingMessageId = $editorStore;
 
   const controller = new InputController(DEFAULT_KEYMAP, handleCommand);
 
@@ -59,7 +61,7 @@
   });
 
   function jumpToBottomAndMarkRead() {
-      lastAckedMsgId = null;
+      readStatusStore.clearLastAcked();
       chatStore.jumpToBottom();
       checkReadStatus(true);
       tick().then(() => messageListComponent.scrollToBottom({ instant: true }));
@@ -206,9 +208,9 @@
 
   function handleSend(text: string) {
     if (!text) return;
-    if (editingMessageId) {
-        sendUpdate(editingMessageId, text);
-        editingMessageId = null;
+    if (editorStore.isEditing) {
+        sendUpdate(editorStore.messageId!, text);
+        editorStore.completeEdit();
     } else {
         // Mark as read before sending - replying implies you've read everything above
         const channel = $chatStore.activeChannel;
@@ -229,15 +231,15 @@
   }
 
   function handleCancel() {
-      if (editingMessageId) {
-          editingMessageId = null;
+      if (editorStore.isEditing) {
+          editorStore.cancelEdit();
           statusLineComponent.setText('');
       }
   }
 
   function startEdit(msg: any) {
       if (msg && chatStore.isMyMessage(msg)) {
-          editingMessageId = msg.id;
+          editorStore.startEdit(msg.id);
           statusLineComponent.setText(msg.content);
           statusLineComponent.focus();
       }
@@ -250,17 +252,17 @@
   }
 
   // --- FOCUS MANAGEMENT ---
-  function onFocus() { isInsertMode = true; }
-  function onBlur() { isInsertMode = false; }
-  function onWindowFocus() { isWindowFocused = true; }
+  function onFocus() { focusStore.enterInsertMode(); }
+  function onBlur() { focusStore.exitInsertMode(); }
+  function onWindowFocus() { focusStore.onWindowFocus(); }
   function onWindowBlur() {
-     isWindowFocused = false;
+     focusStore.onWindowBlur();
      if ($chatStore.isAttached) chatStore.detach();
   }
 
   // --- READ STATUS LOGIC ---
   function checkReadStatus(immediate = false) {
-      if (!isWindowFocused) return;
+      if (!$focusStore.isWindowFocused) return;
       const msgs = $chatStore.messages;
       const idx = $chatStore.cursorIndex;
 
@@ -269,42 +271,34 @@
       const isAtBottom = $chatStore.isAttached || idx >= msgs.length - 1;
       if (isAtBottom) {
           chatStore.clearUnreadMarker();
-          // Also clear unread count when at bottom (user has seen all messages)
           chatStore.clearUnreadCount($chatStore.activeChannel.id);
       }
 
-      // Always send read status when cursor moves (with debounce)
-      // This ensures backend is notified even when scrolling through history
-      clearTimeout(markReadTimer);
       const doMarkRead = () => {
           if (!$chatStore.activeChannel) return;
           const channel = $chatStore.activeChannel;
           const targetMsg = msgs[idx];
 
-          if (!targetMsg || lastAckedMsgId === targetMsg.id) return;
+          if (!targetMsg || readStatusStore.lastAckedMsgId === targetMsg.id) return;
 
           if (channel.service.id !== 'internal') {
               const realId = channel.id.startsWith('thread_') ? channel.parentChannel?.id : channel.id;
               if (realId) {
                   sendMarkRead(realId, targetMsg.id, channel.service.id);
                   chatStore.markReadUpTo(channel, targetMsg);
-                  lastAckedMsgId = targetMsg.id;
+                  readStatusStore.setLastAcked(targetMsg.id);
               }
           }
       };
 
-      if (immediate) doMarkRead();
-      else markReadTimer = setTimeout(doMarkRead, 1000);
+      readStatusStore.scheduleMarkRead(doMarkRead, immediate);
   }
 
   // --- REACTIVE ORCHESTRATION (Simplified) ---
 
   // 1. Channel Switch: Reset read state and scroll to cursor
-  $: if ($chatStore.activeChannel.id !== lastChannelId) {
-      lastChannelId = $chatStore.activeChannel.id;
-      lastAckedMsgId = null;
-      clearTimeout(markReadTimer);
-      // Scroll to cursor after state settles
+  $: if (readStatusStore.didChannelChange($chatStore.activeChannel.id)) {
+      readStatusStore.onChannelSwitch($chatStore.activeChannel.id);
       tick().then(() => messageListComponent?.scrollToCursor());
   }
 
