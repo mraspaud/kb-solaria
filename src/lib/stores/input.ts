@@ -1,12 +1,12 @@
 import { writable, derived, get } from 'svelte/store';
 import { chatStore } from './chat';
 import { inspectorStore } from './inspector';
-import { allEmojis } from './emoji'; 
+import { allEmojis, type Emoji } from './emoji'; 
 import fuzzysort from 'fuzzysort';
 
 export type TriggerType = '@' | '#' | '~' | ':' | null;
 
-interface MatchResult {
+export interface MatchResult {
     trigger: TriggerType;
     query: string;
     index: number;
@@ -35,6 +35,15 @@ export const users = derived(chatStore, $s => {
     return Array.from($s.users.values()).filter(u => {
         return u.serviceId === activeServiceId || !u.serviceId; 
     });
+});
+
+// 1b. CHANNEL AUTHORS - users who have posted in the current channel/thread
+const channelAuthors = derived(chatStore, $s => {
+    const seen = new Set<string>();
+    for (const msg of $s.messages) {
+        seen.add(msg.author.id);
+    }
+    return seen;
 });
 
 function escapeRegex(string: string) {
@@ -73,8 +82,8 @@ export const entityRegex = derived(
 const initialState: InputState = { raw: "", cursorPos: 0, match: null, selectedIndex: 0 };
 const store = writable<InputState>(initialState);
 
-// 3. UPDATED TRIGGER DETECTION
-function detectTrigger(text: string, cursor: number): MatchResult | null {
+// 3. UPDATED TRIGGER DETECTION (exported for testing)
+export function detectTrigger(text: string, cursor: number): MatchResult | null {
     const sub = text.slice(0, cursor);
     // Added ':' to the regex character set
     const regex = /(^|\s)([@#:~])((?:[a-zA-Z0-9_\-\.]+(?: [a-zA-Z0-9_\-\.]+)*)?)$/;
@@ -150,18 +159,19 @@ export const inputEngine = {
         const target = list[s.selectedIndex];
         let replacement = "";
 
-        // SMART RESOLVE
+        // SMART RESOLVE - use type assertions since we know the type based on trigger
         if (s.match.trigger === '#' || s.match.trigger === '~') {
             const identity = get(chatStore).currentUser;
             const prefix = identity?.channelPrefix || s.match.trigger;
-            replacement = prefix + target.obj.name;
+            const channel = target.obj as { name: string };
+            replacement = prefix + channel.name;
         }
         else if (s.match.trigger === '@') {
-             replacement = "@" + target.obj.name;
+            const user = target.obj as { name: string };
+            replacement = "@" + user.name;
         }
         else if (s.match.trigger === ':') {
-            // FIXED: Handle Object instead of String
-            const emoji = target.obj;
+            const emoji = target.obj as Emoji;
             if (emoji.isCustom) {
                 // Custom emojis insert the shortcode + space
                 replacement = `:${emoji.id}: `; 
@@ -192,41 +202,53 @@ export const inputEngine = {
     reset: () => store.set(initialState)
 };
 
-// 4. CANDIDATES (Updated for Emoji Store)
+// 4. CANDIDATES - autocomplete suggestions based on trigger type
 export const candidates = derived(
-    [store, chatStore, users, allEmojis], 
-    ([$s, $chat, $users, $emojis]) => {
+    [store, chatStore, users, allEmojis, channelAuthors], 
+    ([$s, $chat, $users, $emojis, $channelAuthors]) => {
         if (!$s.match) return [];
         const q = $s.match.query.toLowerCase();
         const activeServiceId = $chat.activeChannel.service.id;
 
-        let source: any[] = [];
-        let keys: string[] = [];
-
+        // Channel triggers: #general, ~random
         if ($s.match.trigger === '#' || $s.match.trigger === '~') {
-            source = $chat.availableChannels.filter(c => c.service.id === activeServiceId);
-            keys = ['name'];
-        } 
-        else if ($s.match.trigger === '@') {
-            source = $users; 
-            keys = ['name', 'id'];
-        } 
-        else if ($s.match.trigger === ':') {
-            // FIXED: Use the new Emoji store
-            source = $emojis;
+            const channels = $chat.availableChannels.filter(c => c.service.id === activeServiceId);
+            if (!q) return channels.map(c => ({ obj: c }));
+            return fuzzysort.go(q, channels, { keys: ['name'] }).map(r => ({ obj: r.obj }));
+        }
+        
+        // Mention trigger: @username
+        // Prioritize users who have posted in the current channel/thread
+        if ($s.match.trigger === '@') {
+            const inChannel = $users.filter(u => $channelAuthors.has(u.id));
+            const notInChannel = $users.filter(u => !$channelAuthors.has(u.id));
+            const keys = ['name', 'id'];
             
-            // Optimization: If query is empty, return top 20
-            if (!q) return source.slice(0, 20).map(e => ({ obj: e }));
-
-            return fuzzysort.go(q, source, { 
+            if (!q) {
+                return [...inChannel, ...notInChannel].map(u => ({ obj: u }));
+            }
+            
+            const inChannelResults = fuzzysort.go(q, inChannel, { keys });
+            const notInChannelResults = fuzzysort.go(q, notInChannel, { keys });
+            
+            return [
+                ...inChannelResults.map(r => ({ obj: r.obj })),
+                ...notInChannelResults.map(r => ({ obj: r.obj }))
+            ];
+        }
+        
+        // Emoji trigger: :fire
+        if ($s.match.trigger === ':') {
+            if (!q) return $emojis.slice(0, 20).map(e => ({ obj: e }));
+            
+            return fuzzysort.go(q, $emojis, { 
                 keys: ['id', 'keywords'], 
                 threshold: -10000,
-                limit: 15 // Limit results for performance
-            }).map(res => ({ obj: res.obj }));
+                limit: 15
+            }).map(r => ({ obj: r.obj }));
         }
 
-        if (!q) return source.map(x => ({ obj: x }));
-        return fuzzysort.go(q, source, { keys }).map(res => ({ obj: res.obj }));
+        return [];
     }
 );
 
@@ -238,11 +260,13 @@ export const ghostText = derived(
         const currentTyped = $s.match.query;
         let targetName: string | undefined = "";
 
-        if ($s.match.trigger === '#' || $s.match.trigger === '~') targetName = target.obj.name;
-        else if ($s.match.trigger === '@') targetName = target.obj.name;
-        else if ($s.match.trigger === ':') {
-            // FIXED: Access .id instead of the object itself
-            targetName = target.obj.id; 
+        // Use type assertions since we know the type based on trigger
+        if ($s.match.trigger === '#' || $s.match.trigger === '~') {
+            targetName = (target.obj as { name: string }).name;
+        } else if ($s.match.trigger === '@') {
+            targetName = (target.obj as { name: string }).name;
+        } else if ($s.match.trigger === ':') {
+            targetName = (target.obj as { id: string }).id;
         }
 
         if (!targetName) return ""; 

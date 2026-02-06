@@ -2,7 +2,7 @@ import { writable, derived } from 'svelte/store';
 import { chatStore } from './chat';
 import type { Message } from '../logic/types';
 
-export type InspectorMode = 'IDLE' | 'CONTEXT' | 'MEDIA' | 'STAGING' | 'LABORATORY';
+export type InspectorMode = 'IDLE' | 'CONTEXT' | 'MEDIA' | 'STAGING' | 'LABORATORY' | 'DIRECTORY';
 
 function createInspectorStore() {
     // Manual overrides (Laboratory/Staging)

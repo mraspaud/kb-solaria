@@ -49,4 +49,6 @@ describe('InputGhost Component', () => {
         // The bug was that this was NOT called, letting focus escape
         expect(spy).toHaveBeenCalled();
     });
+
+
 });

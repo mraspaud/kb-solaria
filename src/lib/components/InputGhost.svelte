@@ -213,7 +213,7 @@ function renderBackdrop(text: string) {
 
     <textarea
         bind:this={textarea}
-        spellcheck="false"
+        spellcheck="true"
         rows="1"
         on:input={handleInput}
         on:keydown={handleKeydown}
@@ -236,6 +236,7 @@ function renderBackdrop(text: string) {
         font-family: inherit;
         font-size: inherit;
         line-height: inherit;
+        box-sizing: border-box;
         padding: 0;
         margin: 0;
         width: 100%;
