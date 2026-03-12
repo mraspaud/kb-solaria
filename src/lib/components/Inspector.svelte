@@ -33,10 +33,13 @@
                     <h3>Attachments</h3>
                     <div class="media-grid">
                         {#each (msg?.attachments || []) as file}
+                            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
                             <div 
                                 class="media-card interactive" 
                                 title={file.path}
                                 on:click={() => sendOpenPath(file.path)}
+                                role="button"
+                                tabindex="0"
                             >
                                 <div class="media-icon">📄</div>
                                 <div class="media-info">
@@ -185,7 +188,6 @@
         text-align: center; pointer-events: none;
     }
     .system-status { font-size: 0.7rem; color: var(--katana-gray); letter-spacing: 2px; opacity: 0.7; }
-    .empty-state { font-style: italic; color: var(--katana-gray); }
     .thread-preview {
         background: rgba(255,255,255,0.05);
         padding: 10px;

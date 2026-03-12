@@ -4,17 +4,50 @@ Solaria is an opinionated, keyboard-centric command center designed for the "Pow
 
 Inspired by Vim and the Unix philosophy, Solaria separates navigation (Normal Mode) from composition (Insert Mode). It aggregates multiple fragmented services (Slack, Mattermost, Rocket.Chat) into a single, unified timeline, allowing you to manage attention on your own terms rather than reacting to every red dot that appears on your screen.
 
+Solaria can run as a **browser application** (for development or lightweight use) or as a **native desktop application** using Tauri.
 
-## 1\. Installation
+## 1. Prerequisites
 
-**Prerequisites**
-You need `git`, `npm` (Node.js), and [`uv`](https://github.com/astral-sh/uv).
+### Required (All Modes)
 
-**Setup**
+| Tool | Version | Purpose |
+|------|---------|---------|
+| [Git](https://git-scm.com/) | Any | Clone the repository |
+| [Node.js](https://nodejs.org/) + npm | 18+ | Frontend build tooling |
+| [uv](https://github.com/astral-sh/uv) | Latest | Python environment management |
+| Python | 3.12+ | Backend runtime |
+
+### Additional for Tauri (Desktop App)
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| [Rust](https://rustup.rs/) | 1.77+ | Tauri compilation |
+| System libraries | See below | WebView rendering |
+
+**Linux (Tauri system dependencies):**
+
+```bash
+# Debian/Ubuntu
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev
+
+# Fedora 38+
+sudo dnf install gtk3-devel webkit2gtk4.1-devel libappindicator-gtk3-devel
+
+# RHEL 10+ / CentOS Stream 10+
+sudo dnf install gtk3-devel webkit2gtk4.1-devel libappindicator-gtk3-devel
+
+# Arch Linux
+sudo pacman -S webkit2gtk-4.1 libappindicator-gtk3
+```
+
+> **Note:** RHEL 9 and earlier do not have WebKitGTK 4.1 available. Use browser mode or upgrade to RHEL 10.
+
+## 2. Installation
+
 Solaria is a "fat" repository containing the backend engine as a submodule.
 
 ```bash
-# 1. Clone recursively (Critical: pulls in the backend engine)
+# 1. Clone recursively (pulls in the backend engine)
 git clone --recursive https://github.com/your-username/kb-solaria.git
 cd kb-solaria
 
@@ -22,13 +55,10 @@ cd kb-solaria
 uv sync
 
 # 3. Install Frontend dependencies
-# (You can also let 'poe' do this automatically on first run)
 npm install
 ```
 
------
-
-## 2\. Configuration (`config.toml`)
+## 3. Configuration (`config.toml`)
 
 Solaria uses a straightforward TOML file to define your chat universe. Create a file named `config.toml`.
 
@@ -61,34 +91,90 @@ name = "Work"
 domain = "mattermost.work.com"
 ```
 
------
+## 4. Running Solaria
 
-## 3\. Quickstart Guide
+> **Important:** Log in to your chat services (Slack, Mattermost, Rocket.Chat) in Firefox before starting Solaria. The backend extracts session cookies from your browser for authentication.
 
-**Make sure you log in to the different services in firefox before starting!**
-Solaria uses stored cookies and local browser storage to fetch tokens and credentials to log in.
+### Browser Mode (Development)
 
-
-**Development Mode (Hybrid)**
-This runs the Frontend (Vite) and Backend (Python) as separate processes with Hot Module Replacement (HMR). Perfect for hacking.
+Runs the Frontend (Vite) and Backend (Python) as separate processes with Hot Module Replacement. Opens in your default browser.
 
 ```bash
 uv run poe dev config.toml
 ```
 
-  * **Frontend:** `http://localhost:5173` (Browser opens automatically)
-  * **Backend API:** `http://localhost:4722`
+| Component | URL |
+|-----------|-----|
+| Frontend | http://localhost:5173 |
+| Backend API | http://localhost:4722 |
 
-<!-- **Production Mode (Appliance)** -->
-<!-- This builds the frontend into static assets and serves the entire application from a single Python process. This is how the "finished product" feels. -->
-<!---->
-<!-- ```bash -->
-<!-- uv run poe build config.toml -->
-<!-- ``` -->
-<!---->
-<!--   * **Appliance:** `http://localhost:4722` -->
+### Tauri Mode (Desktop App - Development)
 
-## 4\. Suggested Workflow
+Runs Solaria as a native desktop application with hot-reload for both frontend and backend.
+
+```bash
+uv run poe tauri-dev config.toml
+```
+
+This spawns three processes:
+1. Vite dev server (frontend hot-reload)
+2. Python backend with watchfiles (auto-restart on code changes)
+3. Tauri window (native desktop shell)
+
+### Tauri Mode (Production Build)
+
+Build a distributable desktop application:
+
+```bash
+npm run tauri:build
+```
+
+Output artifacts (Linux):
+```
+src-tauri/target/release/
+├── solaria                              # Standalone binary
+└── bundle/
+    ├── deb/solaria_0.1.0_amd64.deb     # Debian package
+    └── appimage/solaria_0.1.0.AppImage # AppImage
+```
+
+**Running the production build:**
+
+The production build expects the Python backend to be available. You can either:
+
+1. **Run backend separately:**
+   ```bash
+   uv run python run.py ~/.config/solaria/config.toml &
+   ./src-tauri/target/release/solaria
+   ```
+
+2. **Install the .deb package** (includes desktop integration):
+   ```bash
+   sudo dpkg -i src-tauri/target/release/bundle/deb/solaria_*.deb
+   ```
+   Then start the backend before launching Solaria from your application menu.
+
+### Configuration File Locations
+
+The Tauri app searches for `config.toml` in this order:
+1. `$SOLARIA_CONFIG` environment variable
+2. `~/.config/solaria/config.toml`
+3. `./config.toml` (current directory, for development)
+
+## 5. Testing
+
+```bash
+# Run all tests
+npm test
+
+# Run tests in watch mode
+npm test -- --watch
+
+# Run a specific test file
+npm test -- --run src/lib/platform.test.ts
+```
+
+## 6. Suggested Workflow
 
 ### The Two-Tier Filter
 
@@ -118,7 +204,7 @@ NOISE: All other unread traffic. Channels you follow but haven't starred will ne
 
 -----
 
-## 5\. Default Keybindings
+## 7. Default Keybindings
 
 Solaria is modal, heavily inspired by Vim.
 
@@ -166,3 +252,64 @@ Solaria is modal, heavily inspired by Vim.
 | `Space` | **Quick Switch:** Toggle between last two channels |
 | `e` | Toggle **Inspector** (Metadata view) |
 | `r` | Toggle **Reactions** view (if applicable) |
+
+## 8. Troubleshooting
+
+### "Failed to start the backend server" (Tauri)
+
+The Tauri app couldn't spawn the Python backend. Check:
+1. Is `uv` installed and in your `PATH`?
+2. Is the Python environment set up? Run `uv sync` in the project directory.
+3. Does `config.toml` exist in one of the expected locations?
+
+### "glib-2.0 not found" or similar (Building Tauri)
+
+Missing GTK development libraries. Install them:
+```bash
+# Debian/Ubuntu
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev
+
+# Fedora
+sudo dnf install gtk3-devel webkit2gtk4.1-devel
+```
+
+### "WebKitGTK 4.1 not available" (RHEL 9 / older distros)
+
+Tauri v2 requires WebKitGTK 4.1, which is not available on RHEL 9 or older distributions. Options:
+- Use browser mode (`uv run poe dev config.toml`)
+- Upgrade to RHEL 10 or Fedora 38+
+- Use a Fedora toolbox container
+
+### Backend not connecting
+
+1. Check if the backend is running: `curl http://localhost:4722/ws`
+2. Check backend logs in the terminal
+3. Ensure Firefox has active sessions for your chat services
+
+### "Connection refused" in browser mode
+
+The backend isn't running. Start it with:
+```bash
+uv run python run.py config.toml
+```
+
+## 9. Project Structure
+
+```
+kb-solaria/
+├── src/                    # Svelte frontend
+│   ├── lib/
+│   │   ├── components/     # UI components
+│   │   ├── stores/         # Svelte stores (state management)
+│   │   ├── logic/          # Domain logic (pure TypeScript)
+│   │   └── platform.ts     # Tauri/browser abstraction
+│   └── App.svelte          # Root component
+├── src-tauri/              # Tauri (Rust) shell
+│   ├── src/lib.rs          # Backend lifecycle, config
+│   └── tauri.conf.json     # Tauri configuration
+├── kbunified/              # Python backend (submodule)
+├── config.toml             # Your chat service configuration
+├── run.py                  # Backend entry point
+├── tasks.py                # Poe task definitions
+└── pyproject.toml          # Python project config
+```

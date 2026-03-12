@@ -19,8 +19,14 @@ kbunified = { path = "./kbunified", editable = true }
 # 1. Basic Helpers
 install-frontend = { cmd = "npm install", help = "Install JS dependencies" }
 
-# 2. Dev Mode (Hybrid HMR)
+# 2. Dev Mode (Hybrid HMR) - Browser
 [tool.poe.tasks.dev]
 script = "tasks:run_dev"
-help = "Run Hybrid Dev Mode (Vite + Python HMR)"
+help = "Run Hybrid Dev Mode (Vite + Python HMR) in browser"
+args = [{ name = "config_file", positional = true, required = true }]
+
+# 3. Dev Mode (Tauri) - Desktop App
+[tool.poe.tasks.tauri-dev]
+script = "tasks:run_tauri_dev"
+help = "Run Tauri Dev Mode (Tauri window + Python HMR)"
 args = [{ name = "config_file", positional = true, required = true }]

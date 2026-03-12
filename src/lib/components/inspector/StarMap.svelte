@@ -260,7 +260,7 @@
 <svelte:window on:keydown={handleKeydown} />
 
 <div class="star-map-viewport" bind:this={container}>
-    <canvas bind:this={canvas} />
+    <canvas bind:this={canvas}></canvas>
     <div class="noise-layer"></div>
     <div class="vignette-layer"></div>
 </div>

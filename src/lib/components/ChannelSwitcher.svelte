@@ -102,8 +102,10 @@
   }
 </script>
 
-<div class="backdrop" on:click={onClose}>
-  <div class="modal" on:click|stopPropagation>
+<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+<div class="backdrop" on:click={onClose} role="presentation">
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="modal" on:click|stopPropagation role="dialog" aria-modal="true" tabindex="-1">
     <div class="input-wrapper">
         <span class="icon">🔍</span>
         <input 
@@ -121,10 +123,16 @@
             {@const isMention = unread?.hasMention}
             {@const isUnread = unread?.count > 0}
 
+            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
             <div 
                 class="item" 
                 class:selected={i === selectedIndex}
+                class:unread={isUnread && !isMention}
+                class:mention={isMention}
                 on:click={() => { selectedIndex = i; selectChannel(); }}
+                role="option"
+                aria-selected={i === selectedIndex}
+                tabindex="-1"
             >
                 <span class="service">[{res.obj.service.name}]</span> 
                 <span class="hash">

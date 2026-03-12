@@ -84,11 +84,16 @@
   });
 </script>
 
-<div class="backdrop" on:click={onClose}>
+<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+<div class="backdrop" on:click={onClose} role="presentation">
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div 
         class="picker-window" 
         on:click|stopPropagation 
         on:keydown={handleKeydown}
+        role="dialog"
+        aria-modal="true"
+        tabindex="-1"
     >
         <div class="header">
             <span class="icon">🤔</span>

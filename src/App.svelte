@@ -14,6 +14,7 @@
   import { InputController } from './lib/logic/InputController';
   import { DEFAULT_KEYMAP, type Command } from './lib/logic/keymap';
   import { extractUrls } from './lib/utils/messageUtils';
+  import { copyToClipboard } from './lib/platform';
 
   // Components
   import Sidebar from './lib/components/Sidebar.svelte';
@@ -125,7 +126,7 @@
               if (!isReadOnly) deleteMessage(msg);
               break;
           case 'YANK_MESSAGE':
-              if (msg?.content) navigator.clipboard.writeText(msg.content);
+              if (msg?.content) copyToClipboard(msg.content);
               break;
           case 'OPEN_LINK':
               if (msg?.content) extractUrls(msg.content).forEach(url => sendOpenPath(url));
